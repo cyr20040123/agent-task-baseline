@@ -76,6 +76,9 @@ def post_process_interaction_log(log_file_path: str | os.PathLike[str]) -> str:
         file.write(log_content)
     return log_content
 
+def just_wait(child, sec):
+    child.expect(pexpect.TIMEOUT, timeout=sec)
+
 def interact_with_jiuwenclaw(
     input_string,
     *,
@@ -83,12 +86,15 @@ def interact_with_jiuwenclaw(
     cwd: str | os.PathLike[str] | None = None,
     timeout: float = 600,
     tee: bool = True,
+    session_id: str | None = None,
     command: str = "jiuwenclaw-tui",
+    reset_workspace: bool = False,
 ):
     # 1. 启动工具
     # child = pexpect.spawn('jiuwenclaw-tui', timeout = 600)
     # child.logfile = sys.stdout.buffer
     cwd_path = Path(cwd).expanduser().resolve() if cwd is not None else None
+    command = f"{command} --session {session_id}" if session_id is not None else f"{command}"
     child = pexpect.spawn(
         command,
         cwd=str(cwd_path) if cwd_path is not None else None,
@@ -108,25 +114,37 @@ def interact_with_jiuwenclaw(
         child.expect('https://gitcode.com/openJiuwen/agent-core', timeout=30)  # 替换成你工具实际的提示文字
         
         m_logger.info("等待2秒后按回车（确认workspace）")
-        child.expect(pexpect.TIMEOUT, timeout=2)
+        just_wait(child, 2) # 等待界面稳定
         child.sendline('')  # 发送回车
+
+        if reset_workspace:
+            m_logger.info("检测到重置工作目录指令")
+            assert cwd_path is not None, "重置工作目录需要提供 cwd 参数"
+            child.sendline(f"/workspace set {cwd_path}")  # 发送回车
+            just_wait(child, 3) # 等待界面刷新
+            child.sendline('') # 发送回车确认更换工作目录
         
         m_logger.info("等待2秒后发送请求")
-        child.expect(pexpect.TIMEOUT, timeout=2)
+        just_wait(child, 2)
         child.sendline(input_string)  # 发送你的字符串 + 回车
         child.sendline('')  # 多发送一个回车
         
-        MAX_WAIT_TIME = timeout
-        WAIT_INTERVAL = 5
-        NO_RESPONSE_TIME = 20
-        for _ in range(int(MAX_WAIT_TIME/WAIT_INTERVAL)):
-            child.expect(pexpect.TIMEOUT, timeout=WAIT_INTERVAL) # 使用expect timeout代替time.sleep以防界面卡顿
-            idx = child.expect(['esc to interrupt', pexpect.TIMEOUT], timeout=NO_RESPONSE_TIME)
+        WAIT_INTERVAL = 5 # 每5秒检查一次界面输出，判断是否有新的输出或需要确认的提示
+        NO_RESPONSE_TIME = 20 # 20秒无刷新即为无响应或结束，退出等待循环
+        for _ in range(int(timeout/WAIT_INTERVAL)):
+            just_wait(child, WAIT_INTERVAL) # 使用expect timeout代替time.sleep以防界面卡顿
+            idx = child.expect(['esc to interrupt', 'Enter confirm · Esc reject', pexpect.TIMEOUT], timeout=NO_RESPONSE_TIME)
             if idx == 0:
                 m_logger.info(f"运行中，等待{WAIT_INTERVAL}秒")
                 while(child.expect(['esc to interrupt', pexpect.TIMEOUT], timeout=2) == 0):
                     pass # 消费掉所有缓冲区中的信号
             elif idx == 1:
+                m_logger.info("检测到提示确认信号")
+                just_wait(child, 1) # 等待界面稳定
+                child.sendline('')  # 发送回车确认
+                just_wait(child, 1) # 等待界面稳定
+                child.sendline('')  # 发送回车确认
+            elif idx == 2:
                 m_logger.info("循环等待超时退出，一定时间内无刷新")
                 break
         
@@ -134,7 +152,7 @@ def interact_with_jiuwenclaw(
         m_logger.info(f"捕捉到结束信号[{idx}]")
         
         m_logger.info("发送退出命令")
-        child.sendline("/exit")  # 发送你的字符串 + 回车
+        child.sendline("/exit")
         idx = child.expect([pexpect.TIMEOUT, pexpect.EOF], timeout=10)
         if idx == 0:
             m_logger.info("超时退出")

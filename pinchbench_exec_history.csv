@@ -1,0 +1,2 @@
+timestamp,command,agent,task_score,full_score,remarks
+2026-05-07T16:38:35.018138,openclaw_pinchbench.py selected_meeting_tasks/test/ -o ./pinchbench_runs/jiuwenclaw/v4flash --agent jiuwenclaw --tee --dry-run,jiuwenclaw,5.0,5.0,"5 tasks, 5 openclaw runs, 5 scored"

@@ -76,6 +76,7 @@ def jiuwenclaw_chat(
     tee: bool = False,
     timeout: float = 600.0,
     command: str = "jiuwenclaw-tui",
+    reset_workspace: bool = False,
 ) -> JiuwenClawChatResult:
     """
     解析 prompt 和输出路径后，直接委托给 jiuwenclaw_interact.interact_with_jiuwenclaw。
@@ -96,7 +97,9 @@ def jiuwenclaw_chat(
         cwd=cwd_path,
         timeout=timeout,
         tee=tee,
+        session_id=cid,
         command=command,
+        reset_workspace=reset_workspace,
     )
     complete_response = (
         out_path.read_text(encoding="utf-8", errors="replace")

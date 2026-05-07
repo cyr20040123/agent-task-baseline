@@ -1,0 +1,8 @@
+{
+    "jiuwenclaw": {
+        "skill_path": "~/.jiuwenclaw/agent/jiuwenclaw_workspace/skills/"
+    },
+    "openclaw": {
+        "skill_path": "~/.openclaw/skills/"
+    }
+}

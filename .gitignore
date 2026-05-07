@@ -1,0 +1,17 @@
+.venv
+pinchbench-skill
+*runs*/
+backup/
+clean_runs.sh
+
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzw
+*.pyzwz
+*.pyzwzw
+*.pyzwzwzw

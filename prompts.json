@@ -1,0 +1,5 @@
+{
+    "change_openclaw_workspace_prompt": "First of all, change your workspace directory to: \"<workspace_path>/\", read and write files only in this directory!!! \n",
+    "dump_skill_prompt": "After accomplishing the task, review and summarize your task processing steps into an agent skill file named <skill_filename> and save it to <skill_path>.",
+    "opencode_evaluation_prompt_cn": "请参考位于 \"<task_description_file>\" 的AI Agent任务描述以及评分标准。AI Agent的运行结果位于目录 \"<task_output_dir>\" 中。请根据评分标准，准确评价AI Agent的运行输出结果。如果任务描述及评分标准 md 文件中包含带有代码段的 \"Automated Checks\" 章节，请从中提取评价代码并运行获得结果，然后调整成0-1的分数，作为automated_score。如果有LLM Judge Rubric章节，请按照要求和评分标准对结果打分，然后调整成0-1的分数，作为llm_judge_score。计算得分时注意是否有分项的权重。最后，如果文件中的评分权重grading_weights已经给出，请根据权重计算出任务完成的总得分（automated_score * grading_weights.automated + llm_judge_score * grading_weights.llm_judge），如果仅有一种评分标准，则直接使用该评分标准计算总分。请谨记在输出的最后一行用这个格式加上总得分信息与满分（通常为1.0）信息： \"TASK_SCORE=score, FULL_SCORE=full_score\"。"
+}

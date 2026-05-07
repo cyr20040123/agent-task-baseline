@@ -3,6 +3,8 @@ pinchbench-skill
 *runs*/
 backup/
 clean_runs.sh
+pinchbench_exec_history.csv
+*chat.log
 
 __pycache__
 *.pyc

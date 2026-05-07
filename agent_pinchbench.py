@@ -128,6 +128,9 @@ def run_agent_chat(
     dry_run: bool = False,
 ) -> Any:
     if dry_run:
+        print(f"[Dry Run] agent={agent} chat_id={run_chat_id} output={output}")
+        print("[Dry Run] -------------- prompt ----------------")
+        print(prompt)
         return SimpleNamespace(
             chat_id=run_chat_id,
             output_path=Path(output),
@@ -410,6 +413,7 @@ def main() -> int:
                         output=str(evolve_out),
                         tee=args.tee,
                         reset_workspace=False,
+                        dry_run=args.dry_run,
                     )
                 except Exception as e:
                     print(f"[Skill Evolver 失败] {md_path}: {e}", file=sys.stderr)

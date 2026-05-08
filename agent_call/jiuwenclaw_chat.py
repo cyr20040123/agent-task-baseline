@@ -136,6 +136,11 @@ def _cli() -> int:
         help="工作目录（执行 jiuwenclaw-tui 的位置；默认当前工作目录）",
     )
     parser.add_argument(
+        "--reset-workspace",
+        action="store_true",
+        help="如打开则切换 jiuwenclaw workspace 到 cwd 目录，触发 workspace 重置",
+    )
+    parser.add_argument(
         "--output",
         type=str,
         default=None,
@@ -169,6 +174,7 @@ def _cli() -> int:
             tee=args.tee,
             timeout=args.timeout,
             command=args.command,
+            reset_workspace=args.reset_workspace,
         )
     except FileNotFoundError as e:
         print(e, file=sys.stderr)

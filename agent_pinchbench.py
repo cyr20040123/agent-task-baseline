@@ -469,3 +469,5 @@ if __name__ == "__main__":
 # python3 openclaw_pinchbench.py selected_tasks/task_polymarket_briefing.md -o ./pinchbench_runs
 # python3 openclaw_pinchbench.py selected_tasks -o ./pinchbench_runs --tee
 # python3 ./openclaw_pinchbench.py ./lytton_selected_tasks/ -o ./runs/openclaw --tee
+
+# python agent_pinchbench.py selected_meeting_tasks/test/ -o ./pinchbench_runs/jiuwenclaw/v4flash-naive --agent jiuwenclaw --tee --skill-evolve naive

@@ -31,15 +31,16 @@ def parse_args():
 
     args = parser.parse_args()
 
+    session_explicit = args.session_name is not None
     if not args.session_name:
         args.session_name = "sess_" + datetime.now().strftime("%m%d_%H%M%S")
 
     # Write back to ini file
-    _save_config(args, "llm_proxy.ini")
+    _save_config(args, "llm_proxy.ini", session_explicit)
     return args
 
 
-def _save_config(args, path):
+def _save_config(args, path, session_explicit):
     config = configparser.ConfigParser()
     config["DEFAULT"] = {
         "host": args.host,
@@ -48,8 +49,9 @@ def _save_config(args, path):
         "api-key": args.api_key,
         "log-folder": args.log_folder,
         "log-chatml": str(args.log_chatml),
-        "session-name": args.session_name,
     }
+    if session_explicit:
+        config["DEFAULT"]["session-name"] = args.session_name
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w") as f:
         config.write(f)
@@ -94,6 +96,7 @@ def main():
 
     logger.info("starting llm_proxy on %s:%d, upstream=%s, log_chatml=%s",
                 args.host, args.port, args.base_url, args.log_chatml)
+    print(f"Initial session name: {args.session_name}")
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info",
                 access_log=False)

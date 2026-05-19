@@ -1,0 +1,18 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Say: Hello World",
+      "timestamp": "2026-05-19T08:04:44.174544+00:00"
+    },
+    {
+      "role": "assistant",
+      "content": "\n\nHello World",
+      "reasoning": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: \"Say: Hello World\"\n    *   Intent: The user wants me to output a specific phrase: \"Hello World\".\n    *   Constraint: I need to follow the instruction literally.\n\n2.  **Determine the Output:**\n    *   The phrase is \"Hello World\".\n    *   No additional context or explanation is requested, but usually, a simple direct response is best.\n\n3.  **Formulate the Response:**\n    *   \"Hello World\"\n\n4.  **Final Check:** Does this match the prompt? Yes.\n\n5.  **Execute Output:** Hello World.cw\n",
+      "timestamp": "2026-05-19T08:04:45.556430+00:00"
+    }
+  ],
+  "remarks": {
+    "incomplete": false
+  }
+}

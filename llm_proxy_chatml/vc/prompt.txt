@@ -1,0 +1,69 @@
+用python实现openai请求格式兼容的大模型调用转发记录llm proxy项目，实现请求/响应转发。A向本proxy发送的请求转发到B，B回复响应到本proxy再转发回A，支持流式与非流式请求。
+参数使用configargparse管理，用于把上一次运行的参数保存到llm_proxy.ini文件，后续执行时未在命令行中指定的参数从配置文件读取，在命令行指定的参数更新到配置文件。
+建议使用fastapi库，使用简洁轻量的实现方法。
+==== 参数 ====
+--host HOST 指定llm_proxy运行的IP，默认0.0.0.0
+--port PORT 指定llm_proxy运行的PORT，默认8030
+--base-url BASE_URL 指定上游大模型服务的url(可加port)
+--api-key API_KEY 指定上游大模型服务的API-KEY，如果下游请求未携带则自动添加，如果下游携带则替换
+--log-folder PATH 指定日志和输出文件夹，默认./logs/
+--log-chatml 如果打开则记录完整历史请求，并支持会话总结输出成ChatML格式，如果不打开则不启用此功能
+--session-name SESSION_NAME 设置第一个session的session name，如果未指定则默认"sess_MMdd_hhmmdd"
+
+==== 注意事项 ====
+注意对压缩编码请求的正确处理，注意对流式响应拼接的正确处理
+
+==== 端点实现 ====
+特殊端点：
+需要支持Openai大模型请求转发的相关端点，包括/v1/chat/completions，/v1/completions，需要专门实现是因为需要在proxy中捕获请求整理记录
+自己端点：
+实现自己的简单的/proxyhealth端点，用于检查proxy是否正常运行
+实现POST的/newsession端点，请求体格式：{"session_name": "my_new_session"}。用于将目前的对话历史总结到log_folder/session_name.json的chatml文件中（如果--log-chatml开启），然后重设session_name（请求体为空或没有session_name字段，则使用"sess_MMdd_hhmmdd"重设session_name）。
+透传端点：
+实现未定义的任意POST GET端点兜底转发（例如/v1/models）
+错误处理：
+所有上游错误原样返回给客户端，如果上游返回错误，不记录这条请求避免响应对到对话历史，在日志中记录错误信息
+
+==== 日志相关 ====
+运行时的状态，收发请求等日志记录到log_folder的llm_proxy_MMdd_hhmm.log文件中，MMdd_hhmm为proxy启动的时间。
+
+==== chatml 对话历史输出功能（核心） ====
+（重要！请仔细分析这段需求是否合理，如果不合理或者有逻辑上不确定的地方请随时向我提问确认）
+当--log-chatml开关被打开，则需要记录所有/v1/chat/completions和/v1/completions的推理请求和响应历史，流式响应需要拼接。
+然后，当/newsession端点被调用，或者程序捕获到ctrl+c退出前，则需要收集并处理从proxy启动或上一次调用/newsession（以较迟者为准）直到现在的所有推理请求并输出成chatml的多轮格式，提醒：需要正确处理工具调用等格式，可以安装使用openai等库实现，建议将工具调用放在 assistant 消息中，用正确特殊标签包裹。
+
+举例：通常如果proxy记录了完整的3轮对话，应该能收到如下形式的多个请求
+[系统提示0，用户请求1] @ time0
+[系统提示0，用户请求1, 模型响应1] @ time1
+[系统提示0，用户请求1, 模型响应1，用户请求2] @ time2
+[系统提示0，用户请求1, 模型响应1，用户请求2，模型响应2] @ time3
+[系统提示0，用户请求1, 模型响应1，用户请求2，模型响应2，用户请求3] @ time4
+[系统提示0，用户请求1, 模型响应1，用户请求2，模型响应2，用户请求3，模型响应3] @ time5
+当然，用户请求可能是用户提示词，也有可能是工具调用结果等；模型响应可能是LLM生成内容，也可能是工具调用的function call等等。
+
+将上述请求总结成一条chatml多轮对话记录时，需要确保这些请求的前缀能匹配，再把这些请求归纳成一组多轮对话输出到一条完整的chatml记录中。
+{
+  "messages": [
+    {"role": "system", "content": "系统提示0"}, 
+    {"role": "user", "content": "用户请求1"}, 
+    {"role": "assistant", "content": "模型响应1"}, 
+    {"role": "user", "content": "用户请求2"}, 
+    {"role": "assistant", "content": "模型响应2"}, 
+    {"role": "user", "content": "用户请求3"}, 
+    {"role": "assistant", "content": "模型响应3"}
+  ],
+  "remarks": {
+    "timestamps": [time0, time1, time2, time3, time4, time5],
+    "incomplete": False,
+  }
+}
+注 - 关于chatml格式的额外要求：需要在如上多加一个timestamp字段，记录对应请求/响应完整到达Proxy时刻的iso时间戳。
+
+
+对于匹配请求不完整的多轮对话历史记录（如下），则仅记录到最后最长且以大模型响应为结束，并记录incomplete: True在remark中，timestamps留空。
+[用户请求1a, 模型响应1a，用户请求2a] @ time2a
+[用户请求1a, 模型响应1a，用户请求2a，模型响应2a] @ time3a
+[用户请求1a, 模型响应1a，用户请求2a，模型响应2a，用户请求3a] @ time4a
+
+==== 测试验证相关 ====
+我已经在localhost:8030端口部署了大模型服务，模型是Qwen/Qwen3.5-4B，支持工具调用，建议写一个测试脚本，便于写好llm proxy之后通过这个脚本和服务来进行测试验证，确保实现正确无误。

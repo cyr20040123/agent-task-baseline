@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -25,7 +26,8 @@ from typing import Any
 import csv
 
 from agent_call.jiuwenclaw_chat import jiuwenclaw_chat
-from agent_call.openclaw_chat import openclaw_chat
+from agent_call.openclaw_chat import openclaw_chat, openclaw_init_agent
+from agent_call.opencode_chat import opencode_chat
 from pinchbench_task_parser import PinchbenchTaskParser
 
 CSV_HISTORY_FILE = "pinchbench_exec_history.csv"
@@ -57,7 +59,7 @@ _SCORE_LINE_RE = re.compile(
 
 PROMPTS_PATH = Path(__file__).resolve().with_name("prompts.json")
 AGENT_CONFIGS_PATH = Path(__file__).resolve().with_name("agent_configs.json")
-OPENCODE_EVALUATION_PROMPT_KEY = "opencode_evaluation_prompt_cn"
+OPENCODE_EVALUATION_PROMPT_KEY = "opencode_evaluation_prompt_en"
 INVOKE_SKILL_PROMPT_KEY = "invoke_skill_prompt"
 NAIVE_SKILL_EVOLUTION_PROMPT_KEY = "naive_skill_evolution_prompt"
 
@@ -94,7 +96,9 @@ def load_prompt_template(
         raise ValueError(f"prompts.json 缺少非空字符串键: {key}")
     for k, v in (replace_dict or {}).items():
         k = f"<{k}>" if not k.startswith("<") else k
-        value = value.replace(k, v)
+        new_value = value.replace(k, v)
+        assert(value != new_value)
+        value = new_value
     return value
 
 
@@ -112,6 +116,8 @@ def load_agent_skill_path(agent_name: str, config_path: Path = AGENT_CONFIGS_PAT
     skill_path = entry.get("skill_path")
     if not isinstance(skill_path, str) or not skill_path:
         raise ValueError(f"agent_configs.json 缺少 skill_path: {agent_name}")
+    if (skill_path.endswith("/")):
+        skill_path = skill_path[:-1]
     return skill_path
 
 
@@ -147,10 +153,19 @@ def run_agent_chat(
             tee=tee,
             reset_workspace=reset_workspace,
         )
+    elif agent == "opencode":
+        return opencode_chat(
+            prompt=prompt,
+            cwd=cwd,
+            timeout=timeout,
+            output=output,
+            tee=tee,
+        )
     return openclaw_chat(
         prompt=prompt,
         chat_id=run_chat_id,
-        session_id=run_chat_id,
+        agent="pinchbench",
+        # session_id=run_chat_id,
         timeout=timeout,
         cwd=cwd,
         output=output,
@@ -172,7 +187,6 @@ def opencode_evaluation(
     ``task_description_file``、``task_output_dir`` 以绝对路径写入评判提示词。
     评判输出写入 ``task_output_dir / f"{run_id}_opencode_eval.txt"``。
     """
-    from agent_call.opencode_chat import opencode_chat
 
     desc_abs = str(Path(task_description_file).expanduser().resolve())
     out_abs = str(Path(task_output_dir).expanduser().resolve())
@@ -185,10 +199,10 @@ def opencode_evaluation(
     eval_out = Path(task_output_dir).expanduser().resolve() / f"{run_id}_opencode_eval.txt"
     
     if dry_run:
-        return 1.0, 1.0, SimpleNamespace(
+        return -1.0, 1.0, SimpleNamespace(
             chat_id=run_id,
             output_path=eval_out,
-            complete_response="",
+            complete_response="123",
             returncode=0,
         )
     
@@ -202,12 +216,19 @@ def opencode_evaluation(
     task_score, full_score = parse_task_score_from_opencode_output(result.complete_response)
     return task_score, full_score, result
 
+def reset_session_name(url, new_name):
+    cmd = f"curl -X POST {url}/newsession -H 'Content-Type: application/json' -d '{{\"session_name\": \"{new_name}\"}}'"
+    try:
+        os.system(cmd)
+    except Exception as e:
+        print(f"Error occurred while resetting session name: {e}", file=sys.stderr)
+
 
 def main() -> int:
     command = " ".join(sys.argv)
 
     parser = argparse.ArgumentParser(
-        description="从任务描述 .md 提取 ## Prompt，逐个调用 openclaw_chat；"
+        description="从任务描述 .md 提取 ## Prompt，逐个调用 agent_chat；"
         "每任务完成后用 opencode_chat 评分（cwd 为运行本脚本时的当前工作目录）。"
     )
     parser.add_argument(
@@ -226,14 +247,15 @@ def main() -> int:
         "-t",
         "--timeout",
         type=float,
-        default=600.0,
-        help="单次 openclaw 子进程超时秒数（默认 600）",
+        default=900.0,
+        help="单次 openclaw 子进程超时秒数（默认 900）",
     )
+    DEFAULT_AGENT = "jiuwenclaw"
     parser.add_argument(
         "--agent",
         choices=("openclaw", "jiuwenclaw"),
-        default="openclaw",
-        help="选择执行任务的 agent（默认 openclaw）",
+        default=DEFAULT_AGENT,
+        help=f"选择执行任务的 agent（默认 {DEFAULT_AGENT}）",
     )
     parser.add_argument(
         "--tee",
@@ -249,7 +271,7 @@ def main() -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="仅打印提示词，不运行 openclaw_chat",
+        help="仅打印提示词，不运行 agent_chat",
     )
     parser.add_argument(
         "--skip-eval",
@@ -258,7 +280,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--skill-evolve",
-        choices=("none", "naive"),
+        choices=("none", "naive", "teacher"),
         default="none",
         help="是否在评分后进行 skill 自进化（默认 none）",
     )
@@ -276,8 +298,28 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    out_root = args.output_dir.expanduser().resolve()
+    skill_path = load_agent_skill_path(args.agent)
+    if args.agent == "openclaw":
+        print("设置 openclaw workspace ...")
+        workspace_root = Path(skill_path).parent # skill_path的上级目录
+        openclaw_init_agent(agent_name="pinchbench", workspace_path=workspace_root, reset=False)
+        # 如果args.output_dir是相对路径，则以workspace_root为基准，如果是绝对路径，则将其加在workspace_root后
+        if args.output_dir.is_absolute():
+            out_root = workspace_root / args.output_dir.relative_to("/")
+        elif args.output_dir.is_relative_to(Path.cwd()):
+            out_root = workspace_root / args.output_dir.relative_to(Path.cwd())
+        else:
+            out_root = workspace_root / args.output_dir
+            print(f"Warning: output_dir {args.output_dir} is not absolute and not relative to current working directory; using it as relative to workspace root", file=sys.stderr)
+            print(f"Resolved output root: {out_root}", file=sys.stderr)
+        out_root = out_root.expanduser().resolve()
+        # workspace_root = workspace_root.expanduser().resolve()
+    else:
+        out_root = args.output_dir.expanduser().resolve() # change to absolute path
+        # workspace_root = Path("./").expanduser().resolve()
     out_root.mkdir(parents=True, exist_ok=True)
+    print(f"输出根目录: {out_root}") # | 工作目录: {workspace_root}")
+    
     task_parser = PinchbenchTaskParser(
         asset_root=args.asset_root,
         cwd_for_assets=Path.cwd(),
@@ -300,6 +342,10 @@ def main() -> int:
         sub = allocate_run_dir(out_root, stem, when)
         sub.mkdir(parents=True, exist_ok=True)
 
+        print(f"\n[任务 {i}]: {md_path}")
+        print(f"[运行目录] {sub}")
+        # input("Press Enter to continue...")
+
         try:
             raw = md_path.read_text(encoding="utf-8")
             task_parser.apply_workspace_files_from_markdown(sub, raw)
@@ -317,17 +363,22 @@ def main() -> int:
 
         skill_name = args.skill_name or md_path.stem
         prompt = ""
-        if args.skill_evolve == "naive":
-            prompt += load_prompt_template(INVOKE_SKILL_PROMPT_KEY, replace_dict={"skill_name": skill_name})
+        if args.skill_evolve == "naive" or args.skill_evolve == "teacher":
+            prompt += load_prompt_template(INVOKE_SKILL_PROMPT_KEY, replace_dict={"skill_name": skill_name, "skill_path": skill_path})
         if args.agent == "openclaw":
+            prompt += load_prompt_template(
+                "change_openclaw_workspace_prompt",
+                # replace_dict={"workspace_path": str(sub.relative_to(workspace_root))},
+                replace_dict={"workspace_path": str(sub)},
+            )
+        else:
             prompt += load_prompt_template(
                 "change_openclaw_workspace_prompt",
                 replace_dict={"workspace_path": str(sub)},
             )
         prompt += task_prompt
 
-        print(f"\n[任务 {i}]: {md_path}")
-        print(f"[运行目录] {sub}")
+        reset_session_name("http://localhost:8088", f"{skill_name}_{when.strftime('%m%d_%H%M%S')}")
 
         # if (args.dry_run):
         #     print(f"[提示词] {prompt}")
@@ -382,39 +433,75 @@ def main() -> int:
                 exit_code = 1
                 if ocr.returncode == 124:
                     print("注意：opencode 子进程已超时，评分输出可能不完整", file=sys.stderr)
+            skip_evolve=False
             if task_score is not None and full_score is not None:
                 score_rows.append((task_score, full_score))
                 print(f"[评分] TASK_SCORE={task_score} FULL_SCORE={full_score}")
+                skip_evolve = True if task_score == full_score or task_score <= 0.0 else False
             else:
                 print(
                     "[评分] 未能从 opencode 输出中解析 TASK_SCORE=..., FULL_SCORE=...",
                     file=sys.stderr,
                 )
                 exit_code = 1
+                skip_evolve = True
 
-            if args.skill_evolve == "naive" and ocr.returncode == 0 and r.returncode == 0:
+            if (args.skill_evolve == "naive" or args.skill_evolve == "teacher") and ocr.returncode == 0 and r.returncode == 0 and skip_evolve == False:
+                print(f"[Skill Evolver] 进行 skill 自进化（策略 {args.skill_evolve}）…")
                 try:
-                    skill_path = load_agent_skill_path(args.agent)
-                    evolve_prompt = load_prompt_template(
-                        NAIVE_SKILL_EVOLUTION_PROMPT_KEY,
-                        replace_dict={
-                            "task_evaluation_file": str(ocr.output_path),
-                            "skill_path": skill_path,
-                            "skill_name": skill_name,
-                        },
-                    )
-                    evolve_out = sub / f"{run_chat_id}_{args.agent}_evolve_output.txt"
-                    _ = run_agent_chat(
-                        agent=args.agent,
-                        prompt=evolve_prompt,
-                        run_chat_id=run_chat_id,
-                        timeout=args.timeout,
-                        cwd=sub,
-                        output=str(evolve_out),
-                        tee=args.tee,
-                        reset_workspace=False,
-                        dry_run=args.dry_run,
-                    )
+                    if args.skill_evolve == "naive":
+                        # option 1. refer to the judge's output file 
+                        # evolve_prompt = load_prompt_template(
+                        #     NAIVE_SKILL_EVOLUTION_PROMPT_KEY,
+                        #     replace_dict={
+                        #         "task_evaluation_file": str(ocr.output_path),
+                        #         "skill_path": skill_path,
+                        #         "skill_name": skill_name,
+                        #     },
+                        # )
+                        # option 2. inject judge's output into the context directly
+                        evolve_prompt = load_prompt_template(
+                            "naive_skill_evolution_prompt_direct",
+                            replace_dict={
+                                "judge_complete_response": ocr.complete_response,
+                                "skill_path": skill_path,
+                                "skill_name": skill_name,
+                            },
+                        )
+                        evolve_out = sub / f"{run_chat_id}_{args.agent}_evolve_output.txt"
+                        _ = run_agent_chat(
+                            agent=args.agent,
+                            prompt=evolve_prompt,
+                            run_chat_id=run_chat_id,
+                            timeout=args.timeout,
+                            cwd=sub,
+                            output=str(evolve_out),
+                            tee=args.tee,
+                            reset_workspace=False,
+                            dry_run=args.dry_run,
+                        )
+                    if args.skill_evolve == "teacher":
+                        evolve_prompt = load_prompt_template(
+                            "teacher_skill_evolution_prompt_direct",
+                            replace_dict={
+                                "workspace_path": str(sub),
+                                "judge_complete_response": ocr.complete_response,
+                                "skill_path": skill_path,
+                                "skill_name": skill_name,
+                            },
+                        )
+                        evolve_out = sub / f"{run_chat_id}_{args.agent}_evolve_output.txt"
+                        _ = run_agent_chat(
+                            agent="opencode",
+                            prompt=evolve_prompt,
+                            run_chat_id=run_chat_id,
+                            timeout=args.timeout,
+                            cwd=sub,
+                            output=str(evolve_out),
+                            tee=args.tee,
+                            reset_workspace=False,
+                            dry_run=args.dry_run,
+                        )
                 except Exception as e:
                     print(f"[Skill Evolver 失败] {md_path}: {e}", file=sys.stderr)
                     exit_code = 1
@@ -463,7 +550,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    exit_code = main()
+    raise SystemExit(exit_code)
 
 # sample usage:
 # python3 openclaw_pinchbench.py selected_tasks/task_polymarket_briefing.md -o ./pinchbench_runs

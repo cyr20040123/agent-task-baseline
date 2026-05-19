@@ -133,20 +133,22 @@ def interact_with_jiuwenclaw(
         NO_RESPONSE_TIME = 20 # 20秒无刷新即为无响应或结束，退出等待循环
         for _ in range(int(timeout/WAIT_INTERVAL)):
             just_wait(child, WAIT_INTERVAL) # 使用expect timeout代替time.sleep以防界面卡顿
-            idx = child.expect(['esc to interrupt', 'Enter confirm · Esc reject', pexpect.TIMEOUT], timeout=NO_RESPONSE_TIME)
+            idx = child.expect(['esc to interrupt', 'Enter confirm', pexpect.TIMEOUT], timeout=NO_RESPONSE_TIME)
+            # 以下if的顺序很重要
+            if idx == 2:
+                m_logger.info("循环等待超时退出，一定时间内无刷新")
+                break
             if idx == 0:
                 m_logger.info(f"运行中，等待{WAIT_INTERVAL}秒")
-                while(child.expect(['esc to interrupt', pexpect.TIMEOUT], timeout=2) == 0):
-                    pass # 消费掉所有缓冲区中的信号
-            elif idx == 1:
+                while(idx == 0): # 消费掉所有缓冲区中的信号
+                    idx = child.expect(['esc to interrupt', 'Enter confirm', pexpect.TIMEOUT], timeout=2)
+            if idx == 1:
                 m_logger.info("检测到提示确认信号")
                 just_wait(child, 1) # 等待界面稳定
                 child.sendline('')  # 发送回车确认
                 just_wait(child, 1) # 等待界面稳定
                 child.sendline('')  # 发送回车确认
-            elif idx == 2:
-                m_logger.info("循环等待超时退出，一定时间内无刷新")
-                break
+                continue
         
         idx = child.expect(['mode:code.normal', '────────────────────────────────────────', pexpect.TIMEOUT], timeout=20)
         m_logger.info(f"捕捉到结束信号[{idx}]")

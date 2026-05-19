@@ -1,8 +1,11 @@
 {
     "jiuwenclaw": {
-        "skill_path": "~/.jiuwenclaw/agent/jiuwenclaw_workspace/skills/"
+        "new_skill_path": "/home/sagaera/benchmark_skills/jiuwenclaw/",
+        "skill_path": "/home/sagaera/.jiuwenclaw/agent/jiuwenclaw_workspace/skills/"
     },
     "openclaw": {
-        "skill_path": "~/.openclaw/skills/"
-    }
+        "default_skill_path": "/home/sagaera/.openclaw/skills/",
+        "skill_path": "./pinchbench_runs/openclaw/workspace/skills/"
+    },
+    "README": "这个文件用于agent_pinchbench注入skill提示词以及skill_manager备份多版本skills。"
 }

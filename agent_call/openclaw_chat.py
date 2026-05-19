@@ -61,10 +61,22 @@ class OpenClawChatResult:
     """complete_response 与 output_path 指向文件的内容一致（运行结束后读取）。"""
 
     chat_id: str
-    session_id: str
+    # session_id: str
     output_path: Path
     complete_response: str
     returncode: int
+
+
+def openclaw_init_agent(agent_name: str = "pinchbench", workspace_path: str = "./pinchbench_runs/openclaw/workspace", reset: bool = False) -> bool:
+    cmd_reset = f"openclaw agents delete {agent_name} --force"
+    cmd = f"openclaw agents add {agent_name} --workspace {workspace_path}"
+    try:
+        if reset:
+            subprocess.run(cmd_reset, shell=True, check=True)
+        subprocess.run(cmd, shell=True, check=True)
+        return True
+    except subprocess.CalledProcessError:
+        return False
 
 
 def openclaw_chat(
@@ -73,8 +85,8 @@ def openclaw_chat(
     prompt_file: Optional[str | Path] = None,
     cwd: Optional[str | Path] = None,
     chat_id: Optional[str] = None,
-    session_id: Optional[str] = None,
-    agent: str = "main",
+    # session_id: Optional[str] = None,
+    agent: str | None = None,
     thinking: str = "medium",
     output: str | Path | None = None,
     tee: bool = False,
@@ -93,23 +105,27 @@ def openclaw_chat(
         choices = ", ".join(THINKING_LEVELS)
         raise ValueError(f"thinking 必须是以下之一：{choices}")
 
-    text = resolve_prompt(prompt, prompt_file)
+    prompt_text = resolve_prompt(prompt, prompt_file)
     cid = chat_id or make_chat_id()
-    sid = session_id or cid
+    # sid = session_id or cid
     out_path = resolve_output_path(output, cid)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     cwd_path = Path(cwd).expanduser().resolve() if cwd is not None else Path.cwd()
     cwd_path.mkdir(parents=True, exist_ok=True)
 
-    qagent = shlex.quote(agent)
-    qsid = shlex.quote(sid)
+    if agent is not None and len(agent.strip()) > 0:
+        qagent = f"--agent {shlex.quote(agent)}"
+    else:
+        qagent = "" # f"{shlex.quote(cid)}"  # 复用 chat_id 作为 agent 名称，避免用户还要额外指定一个参数
+    # qsid = shlex.quote(sid)
+    qsid = shlex.quote(cid)
     qthinking = shlex.quote(thinking)
-    qtext = shlex.quote(text)
+    qprompt_text = shlex.quote(prompt_text)
     qout = shlex.quote(str(out_path))
     cmd = (
-        f"openclaw agent --agent {qagent} --session-id {qsid} "
-        f"--thinking {qthinking} --message {qtext}"
+        f"openclaw agent {qagent} --session-id {qsid} "
+        f"--thinking {qthinking} --message {qprompt_text}"
     )
     if local:
         cmd = f"{cmd} --local"
@@ -117,7 +133,9 @@ def openclaw_chat(
         inner = f"set -o pipefail; {cmd} 2>&1 | tee {qout}"
     else:
         inner = f"{cmd} > {qout} 2>&1"
-
+    
+    # input(f"Running command in {cwd_path}:\n{inner}")
+    
     # 使用 bash -c 而非 -lc：登录 shell 常重置 PATH，导致终端里能用的 openclaw 在子进程中找不到
     kwargs: dict = {
         "args": ["bash", "-c", inner],
@@ -138,7 +156,7 @@ def openclaw_chat(
     )
     return OpenClawChatResult(
         chat_id=cid,
-        session_id=sid,
+        # session_id=cid,
         output_path=out_path,
         complete_response=complete_response,
         returncode=rc,

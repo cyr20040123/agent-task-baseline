@@ -188,7 +188,7 @@ class PinchbenchTaskParser:
                 raise ValueError(f"不是 Markdown 文件: {p}")
             return [p]
         if p.is_dir():
-            files = sorted(p.glob("*.md"))
+            files = sorted(p.rglob("*.md"))
             if not files:
                 raise ValueError(f"目录中没有任何 .md 文件: {p}")
             return files

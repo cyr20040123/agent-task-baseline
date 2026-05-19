@@ -1,10 +1,13 @@
 .venv
 pinchbench-skill
 *runs*/
-backup/
+pinchbench_runs/
+*tasks/
+*tasks2/
+*backup/
 clean_runs.sh
 pinchbench_exec_history.csv
-*chat.log
+*.log
 
 __pycache__
 *.pyc

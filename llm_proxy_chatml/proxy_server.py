@@ -197,15 +197,16 @@ async def _handle_chat_completions(request: Request, upstream: str, api_key: str
                                   session_mgr: SessionManager):
     body = await request.json()
     messages = body.get("messages", [])
+    tools = body.get("tools")
     is_stream = body.get("stream", False)
     req_ts = _now_iso()
 
     # --- session matching ---
     session, match_len = session_mgr.find_matching_session(messages)
     if session is None:
-        session = session_mgr.create_session(messages, req_ts)
+        session = session_mgr.create_session(messages, req_ts, tools)
     else:
-        session_mgr.append_request_messages(session, messages, match_len, req_ts)
+        session_mgr.append_request_messages(session, messages, match_len, req_ts, tools)
 
     # --- forward to upstream ---
     headers = _build_upstream_headers(request, api_key)

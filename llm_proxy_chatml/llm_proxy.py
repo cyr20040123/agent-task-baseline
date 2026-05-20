@@ -94,8 +94,8 @@ def main():
     signal.signal(signal.SIGINT, _sig_handler)
     signal.signal(signal.SIGTERM, _sig_handler)
 
-    logger.info("starting llm_proxy on %s:%d, upstream=%s, log_chatml=%s",
-                args.host, args.port, args.base_url, args.log_chatml)
+    logger.info("starting llm_proxy on %s:%d, upstream=%s, log_chatml=%s, log_folder=%s",
+                args.host, args.port, args.base_url, args.log_chatml, args.log_folder)
     print(f"Initial session name: {args.session_name}")
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info",

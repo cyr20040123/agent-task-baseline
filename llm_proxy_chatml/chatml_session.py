@@ -85,23 +85,34 @@ class SessionManager:
     # ------------------------------------------------------------------
     # Session creation / update
     # ------------------------------------------------------------------
-    def create_session(self, request_messages, timestamp):
+    def create_session(self, request_messages, timestamp, tools=None):
         """Create a new session.  Only the *last* message is considered
         directly observed; earlier messages get an empty timestamp because
         the proxy did not witness their arrival."""
-        session = {"messages": []}
+        session = {"messages": [], "tools": []}
+        if tools:
+            session["tools"] = list(tools)
         for i, msg in enumerate(request_messages):
             ts = timestamp if i == len(request_messages) - 1 else ""
             session["messages"].append({**msg, "timestamp": ts})
         self.sessions.append(session)
         return session
 
-    def append_request_messages(self, session, request_messages, match_len, timestamp):
+    def append_request_messages(self, session, request_messages, match_len, timestamp,
+                                tools=None):
         """Append suffix messages (those beyond match_len) to the session.
-        Each new message gets the request-arrival timestamp."""
+        Each new message gets the request-arrival timestamp.
+        New tool definitions are merged in (deduplicated by function name)."""
         new_msgs = request_messages[match_len:]
         for msg in new_msgs:
             session["messages"].append({**msg, "timestamp": timestamp})
+        if tools:
+            known = {t.get("function", {}).get("name") for t in session["tools"]}
+            for t in tools:
+                name = t.get("function", {}).get("name")
+                if name and name not in known:
+                    session["tools"].append(t)
+                    known.add(name)
 
     def append_response(self, session, response_message, timestamp):
         """Append an assistant response message with its own timestamp."""
@@ -130,6 +141,8 @@ class SessionManager:
             "messages": chatml_msgs,
             "remarks": {"incomplete": incomplete},
         }
+        if sess.get("tools"):
+            output["tools"] = sess["tools"]
 
         filepath = os.path.join(self.log_folder, f"{self.session_name}{suffix}.json")
         with open(filepath, "w", encoding="utf-8") as f:

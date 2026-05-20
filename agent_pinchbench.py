@@ -60,7 +60,6 @@ _SCORE_LINE_RE = re.compile(
 PROMPTS_PATH = Path(__file__).resolve().with_name("prompts.json")
 AGENT_CONFIGS_PATH = Path(__file__).resolve().with_name("agent_configs.json")
 OPENCODE_EVALUATION_PROMPT_KEY = "opencode_evaluation_prompt_en"
-INVOKE_SKILL_PROMPT_KEY = "invoke_skill_prompt"
 NAIVE_SKILL_EVOLUTION_PROMPT_KEY = "naive_skill_evolution_prompt"
 
 
@@ -280,9 +279,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--skill-evolve",
-        choices=("none", "naive", "teacher"),
+        choices=("none", "naive", "teacher", "use"),
         default="none",
-        help="是否在评分后进行 skill 自进化（默认 none）",
+        help="是否在评分后进行skill提示词自进化：none - 不进化（默认）; naive - 基于评分结果和原提示词进行自我改进; teacher - 基于评分结果由 judge agent 生成改进提示词; use - 仅使用已存在的skill，不更新改进",
     )
     parser.add_argument(
         "--skill-name",
@@ -363,8 +362,8 @@ def main() -> int:
 
         skill_name = args.skill_name or md_path.stem
         prompt = ""
-        if args.skill_evolve == "naive" or args.skill_evolve == "teacher":
-            prompt += load_prompt_template(INVOKE_SKILL_PROMPT_KEY, replace_dict={"skill_name": skill_name, "skill_path": skill_path})
+        if args.skill_evolve == "naive" or args.skill_evolve == "teacher" or args.skill_evolve == "use":
+            prompt += load_prompt_template("invoke_skill_prompt", replace_dict={"skill_name": skill_name, "skill_path": skill_path})
         if args.agent == "openclaw":
             prompt += load_prompt_template(
                 "change_openclaw_workspace_prompt",

@@ -20,6 +20,8 @@ def main():
     url = f"http://{host}:{port}/newsession"
     body = json.dumps({"session_name": args.session_name}).encode()
 
+    print(f"\n\nRequest sending to {url} with session_name={args.session_name}")
+
     req = Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
     with urlopen(req) as resp:
         result = json.loads(resp.read())

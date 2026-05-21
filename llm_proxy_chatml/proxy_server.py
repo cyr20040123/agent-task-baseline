@@ -160,17 +160,22 @@ def create_app(base_url: str, api_key: str, session_manager: SessionManager) -> 
     async def newsession(request: Request):
         session_manager.dump_all()
         new_name = None
+        new_path = None
         try:
             body = await request.json()
             new_name = body.get("session_name")
+            new_path = body.get("session_path")
         except Exception:
             pass
         from datetime import datetime
         if not new_name:
             new_name = "sess_" + datetime.now().strftime("%m%d_%H%M%S")
         session_manager.session_name = new_name
-        logger.info("newsession: switched to '%s'", new_name)
-        return {"status": "ok", "session_name": new_name}
+        session_manager.session_path = new_path or session_manager.log_folder
+        logger.info("newsession: switched to '%s' (path=%s)", new_name,
+                    session_manager.session_path)
+        return {"status": "ok", "session_name": new_name,
+                "session_path": session_manager.session_path}
 
     # --- /v1/chat/completions ---
     @app.post("/v1/chat/completions")
@@ -272,7 +277,7 @@ async def _handle_completions(request: Request, upstream: str, api_key: str,
 
 def _find_completion_session(session_mgr: SessionManager, prompt: str):
     """Prefix match for legacy completions — compares accumulated prompt text."""
-    if not session_mgr.log_chatml_enabled:
+    if not session_mgr.enabled:
         return None, 0
     for sess in session_mgr.sessions:
         accum = ""
@@ -367,7 +372,7 @@ async def _stream_forward_completions(url: str, headers: dict,
 # ---------------------------------------------------------------------------
 def _record_chat_response(session_mgr: SessionManager, session: dict,
                           resp_body: dict, timestamp: str):
-    if not session_mgr.log_chatml_enabled:
+    if not session_mgr.enabled:
         return
     for choice in resp_body.get("choices", []):
         msg = choice.get("message", {})
@@ -377,7 +382,7 @@ def _record_chat_response(session_mgr: SessionManager, session: dict,
 
 def _record_completion_response(session_mgr: SessionManager, session: dict,
                                 resp_body: dict, timestamp: str):
-    if not session_mgr.log_chatml_enabled:
+    if not session_mgr.enabled:
         return
     for choice in resp_body.get("choices", []):
         text = choice.get("text", "")

@@ -25,24 +25,41 @@ def parse_args():
     parser.add("--base-url", required=True, help="Upstream LLM service base URL")
     parser.add("--api-key", default="", help="Upstream API key")
     parser.add("--log-folder", default="./logs/", help="Log and output directory")
-    parser.add("--log-chatml", action="store_true", default=False,
-               help="Enable ChatML session recording")
+    parser.add("--log-chatml", choices=["none", "multi", "single"], default="none",
+               help="ChatML recording mode: none (disabled), multi (prefix-matched "
+               "multi-turn), single (one entry per request)")
     parser.add("--session-name", default=None, help="Initial session name")
+    parser.add("--session-path", default="",
+               help="ChatML output path (defaults to --log-folder)")
 
     args = parser.parse_args()
 
     session_explicit = args.session_name is not None
     if not args.session_name:
         args.session_name = "sess_" + datetime.now().strftime("%m%d_%H%M%S")
+    if not args.session_path:
+        args.session_path = args.log_folder
 
-    # Write back to ini file
+    # Write back: preserve [DEFAULT] + other sections, update only [RECENT]
     _save_config(args, "llm_proxy.ini", session_explicit)
     return args
 
 
 def _save_config(args, path, session_explicit):
-    config = configparser.ConfigParser()
-    config["DEFAULT"] = {
+    # Read existing ini to preserve all sections except [RECENT]
+    old = configparser.ConfigParser()
+    old.read(path)
+
+    # Build new ini: copy all sections except [RECENT], then write [RECENT]
+    ini = configparser.ConfigParser()
+    if old.defaults():
+        ini["DEFAULT"] = dict(old.defaults())
+    for sec in old.sections():
+        if sec == "RECENT":
+            continue
+        ini[sec] = dict(old[sec])
+
+    recent = {
         "host": args.host,
         "port": str(args.port),
         "base-url": args.base_url,
@@ -51,10 +68,12 @@ def _save_config(args, path, session_explicit):
         "log-chatml": str(args.log_chatml),
     }
     if session_explicit:
-        config["DEFAULT"]["session-name"] = args.session_name
+        recent["session-name"] = args.session_name
+    ini["RECENT"] = recent
+
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w") as f:
-        config.write(f)
+        ini.write(f)
 
 
 def setup_logging(log_folder):
@@ -78,7 +97,8 @@ def main():
     args = parse_args()
     logger = setup_logging(args.log_folder)
 
-    session_mgr = SessionManager(args.log_folder, args.session_name, args.log_chatml)
+    session_mgr = SessionManager(args.log_folder, args.session_name, args.log_chatml,
+                                 args.session_path)
 
     app = create_app(args.base_url, args.api_key, session_mgr)
 

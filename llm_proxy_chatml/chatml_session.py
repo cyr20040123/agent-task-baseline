@@ -1,6 +1,9 @@
 import json
+import logging
 import os
 from datetime import datetime, timezone
+
+logger = logging.getLogger("llm_proxy")
 
 
 def _normalize_tool_calls(tool_calls):
@@ -54,46 +57,110 @@ def _now_iso():
 
 
 class SessionManager:
-    def __init__(self, log_folder, session_name, log_chatml_enabled):
+    def __init__(self, log_folder, session_name, mode, session_path=""):
         self.log_folder = log_folder
         self.session_name = session_name
-        self.log_chatml_enabled = log_chatml_enabled
+        self.mode = mode  # "none", "multi", "single"
+        self.session_path = session_path or log_folder
         self.sessions = []
+
+    @property
+    def enabled(self):
+        return self.mode != "none"
 
     # ------------------------------------------------------------------
     # Prefix matching
     # ------------------------------------------------------------------
     def find_matching_session(self, request_messages):
         """Return (session, match_len) where session.messages[:match_len]
-        is a prefix of request_messages.  Comparison ignores timestamps
-        and normalises tool-call arguments."""
-        if not self.log_chatml_enabled:
+        is a prefix of request_messages.  Only active in 'multi' mode. 
+        Comparison ignores timestamps and normalises tool-call arguments.
+        A mismatch on system messages alone is tolerated (logged as a warning)."""
+        if self.mode != "multi":
             return None, 0
         for sess in self.sessions:
             sess_msgs = sess["messages"]
             if len(sess_msgs) > len(request_messages):
                 continue
             ok = True
+            system_mismatch = False
             for i, sm in enumerate(sess_msgs):
                 if _canonical(sm) != _canonical(request_messages[i]):
+                    if (sm.get("role") == "system" and
+                            request_messages[i].get("role") == "system"):
+                        system_mismatch = True
+                        continue
                     ok = False
                     break
             if ok:
+                if system_mismatch:
+                    logger.warning("session matched with different system prompt")
                 return sess, len(sess_msgs)
         return None, 0
+    
+    # # for debugging: log detailed mismatch info
+    # def find_matching_session(self, request_messages):
+    #     """Return (session, match_len) where session.messages[:match_len]
+    #     is a prefix of request_messages.  Comparison ignores timestamps
+    #     and normalises tool-call arguments.  A mismatch on system messages
+    #     alone is tolerated (logged as a warning)."""
+    #     if not self.log_chatml_enabled:
+    #         return None, 0
+    #     for si, sess in enumerate(self.sessions):
+    #         sess_msgs = sess["messages"]
+    #         if len(sess_msgs) > len(request_messages):
+    #             logger.debug("  session[%d] len %d > req len %d — skip",
+    #                          si, len(sess_msgs), len(request_messages))
+    #             continue
+    #         ok = True
+    #         system_mismatch = False
+    #         for i, sm in enumerate(sess_msgs):
+    #             sc = _canonical(sm)
+    #             rc = _canonical(request_messages[i])
+    #             if sc != rc:
+    #                 if (sm.get("role") == "system" and
+    #                         request_messages[i].get("role") == "system"):
+    #                     system_mismatch = True
+    #                     continue
+    #                 diff_pos = next(
+    #                     (j for j, (a, b) in enumerate(zip(sc, rc)) if a != b),
+    #                     min(len(sc), len(rc)),
+    #                 )
+    #                 start = max(0, diff_pos - 100)
+    #                 end = min(max(len(sc), len(rc)), diff_pos + 100)
+    #                 marker = " " * (diff_pos - start) + "^"
+    #                 logger.debug(
+    #                     "  session[%d] mismatch at idx %d, pos %d:\n"
+    #                     "    sess: ...%s...\n"
+    #                     "    req:  ...%s...\n"
+    #                     "          %s",
+    #                     si, i, diff_pos,
+    #                     sc[start:end], rc[start:end], marker,
+    #                 )
+    #                 ok = False
+    #                 break
+    #         if ok:
+    #             if system_mismatch:
+    #                 logger.warning("session[%d] matched with different system prompt", si)
+    #             logger.debug("  session[%d] matched (prefix_len=%d)", si, len(sess_msgs))
+    #             return sess, len(sess_msgs)
+    #     logger.debug("  no matching session for req with %d messages", len(request_messages))
+    #     return None, 0
 
     # ------------------------------------------------------------------
     # Session creation / update
     # ------------------------------------------------------------------
     def create_session(self, request_messages, timestamp, tools=None):
-        """Create a new session.  Only the *last* message is considered
-        directly observed; earlier messages get an empty timestamp because
-        the proxy did not witness their arrival."""
+        """Create a new session.  In 'multi' mode only the *last* message
+        gets a real timestamp.  In 'single' mode timestamps are omitted."""
         session = {"messages": [], "tools": []}
         if tools:
             session["tools"] = list(tools)
         for i, msg in enumerate(request_messages):
-            ts = timestamp if i == len(request_messages) - 1 else ""
+            if self.mode == "single":
+                ts = ""
+            else:
+                ts = timestamp if i == len(request_messages) - 1 else ""
             session["messages"].append({**msg, "timestamp": ts})
         self.sessions.append(session)
         return session
@@ -101,11 +168,11 @@ class SessionManager:
     def append_request_messages(self, session, request_messages, match_len, timestamp,
                                 tools=None):
         """Append suffix messages (those beyond match_len) to the session.
-        Each new message gets the request-arrival timestamp.
         New tool definitions are merged in (deduplicated by function name)."""
         new_msgs = request_messages[match_len:]
+        ts = "" if self.mode == "single" else timestamp
         for msg in new_msgs:
-            session["messages"].append({**msg, "timestamp": timestamp})
+            session["messages"].append({**msg, "timestamp": ts})
         if tools:
             known = {t.get("function", {}).get("name") for t in session["tools"]}
             for t in tools:
@@ -115,23 +182,42 @@ class SessionManager:
                     known.add(name)
 
     def append_response(self, session, response_message, timestamp):
-        """Append an assistant response message with its own timestamp."""
-        session["messages"].append({**response_message, "timestamp": timestamp})
+        """Append an assistant response message.  Timestamp omitted in 'single' mode."""
+        ts = "" if self.mode == "single" else timestamp
+        session["messages"].append({**response_message, "timestamp": ts})
 
     # ------------------------------------------------------------------
     # Dump to ChatML JSON
     # ------------------------------------------------------------------
     def dump_all(self):
-        if not self.log_chatml_enabled:
+        if not self.enabled:
             self.sessions = []
             return
-        os.makedirs(self.log_folder, exist_ok=True)
-        for i, sess in enumerate(self.sessions):
-            suffix = f"_{i}" if len(self.sessions) > 1 else ""
-            self._dump_session(sess, suffix)
+        output_dir = self.session_path or self.log_folder
+        os.makedirs(output_dir, exist_ok=True)
+
+        if self.mode == "single":
+            self._dump_single(output_dir)
+        else:
+            for i, sess in enumerate(self.sessions):
+                suffix = f"_{i}" if len(self.sessions) > 1 else ""
+                self._dump_session(sess, suffix, output_dir)
         self.sessions = []
 
-    def _dump_session(self, sess, suffix=""):
+    def _dump_single(self, output_dir):
+        """Single mode: all sessions in one file, no timestamps, no remarks."""
+        entries = []
+        for sess in self.sessions:
+            msgs = sess["messages"]
+            # Remove timestamp from each message
+            clean = [{k: v for k, v in m.items() if k != "timestamp"}
+                     for m in msgs]
+            entries.append({"messages": clean})
+        filepath = os.path.join(output_dir, f"{self.session_name}.json")
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(entries, f, ensure_ascii=False, indent=2)
+
+    def _dump_session(self, sess, suffix="", output_dir=None):
         msgs = sess["messages"]
         chatml_msgs, incomplete = self._build_chatml(msgs)
         if chatml_msgs is None:
@@ -144,7 +230,8 @@ class SessionManager:
         if sess.get("tools"):
             output["tools"] = sess["tools"]
 
-        filepath = os.path.join(self.log_folder, f"{self.session_name}{suffix}.json")
+        out = output_dir or self.session_path or self.log_folder
+        filepath = os.path.join(out, f"{self.session_name}{suffix}.chatml.json")
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(output, f, ensure_ascii=False, indent=2)
 

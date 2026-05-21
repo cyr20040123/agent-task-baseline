@@ -8,6 +8,7 @@ pinchbench_runs/
 clean_runs.sh
 pinchbench_exec_history.csv
 *.log
+*log*/
 
 __pycache__
 *.pyc

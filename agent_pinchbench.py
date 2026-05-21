@@ -213,10 +213,20 @@ def opencode_evaluation(
         tee=tee,
     )
     task_score, full_score = parse_task_score_from_opencode_output(result.complete_response)
+
+    score_out = Path(task_output_dir).expanduser().resolve() / f"score-{task_score}.txt"
+    with score_out.open("w", encoding="utf-8") as f:
+        f.write(f"{task_score}\n")
+        f.write(f"{full_score}\n")
+        f.write(f"{run_id}\n")
+    
     return task_score, full_score, result
 
-def reset_session_name(url, new_name):
-    cmd = f"curl -X POST {url}/newsession -H 'Content-Type: application/json' -d '{{\"session_name\": \"{new_name}\"}}'"
+def reset_session_name(url, new_name, session_path=None):
+    if session_path:
+        cmd = f"curl -X POST {url}/newsession -H 'Content-Type: application/json' -d '{{\"session_name\": \"{new_name}\", \"session_path\": \"{session_path}\"}}'"
+    else:
+        cmd = f"curl -X POST {url}/newsession -H 'Content-Type: application/json' -d '{{\"session_name\": \"{new_name}\"}}'"
     try:
         os.system(cmd)
     except Exception as e:
@@ -377,7 +387,7 @@ def main() -> int:
             )
         prompt += task_prompt
 
-        reset_session_name("http://localhost:8088", f"{skill_name}_{when.strftime('%m%d_%H%M%S')}")
+        reset_session_name("http://localhost:8088", f"{skill_name}_{when.strftime('%m%d_%H%M%S')}", sub)
 
         # if (args.dry_run):
         #     print(f"[提示词] {prompt}")

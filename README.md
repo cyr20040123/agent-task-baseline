@@ -1,5 +1,10 @@
 # agent-task-baseline
 
+## Benchmark 相关
+### 支持的 Agent
+### PinchBench 主要流程
+### Skill 演进相关
+
 ## Jiuwenclaw 复用与调用方式
 
 当前 jiuwenclaw 暂无独立的 CLI 调用或 API接口 实现。本项目提供了 CLI + Python 函数的调用实现，如需在别的项目中复用，请直接使用 [agent_call/jiuwenclaw_chat.py](agent_call/jiuwenclaw_chat.py) （需要包含 [agent_call/jiuwenclaw_interact.py](agent_call/jiuwenclaw_interact.py)）。

@@ -434,7 +434,7 @@ def main():
          "--port", str(proxy_port),
          "--base-url", upstream_url,
          "--log-folder", log_dir,
-         "--log-chatml",
+         "--log-chatml", "multi",
          "--session-name", "test_sess"],
         cwd=cwd,
         stdout=subprocess.DEVNULL,

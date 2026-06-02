@@ -1,0 +1,71 @@
+实现完成。以下是 agent_rollout.py 的变更摘要：
+
+  ---
+  新增类
+  
+  RolloutResult (dataclass, line 189) — 一次 rollout 的完整返回值：
+  - chat_id / output_path / complete_response / returncode — agent_chat 执行结果
+  - chatml_sessions — proxy 收集的 ChatML session 列表
+  - chatml_files — proxy 输出的 ChatML JSON 文件路径
+  - session_name / session_path — 本次 rollout 的 session 信息
+  
+  AgentRollout (line 215) — 核心类：
+
+  ┌───────────────────────┬───────────────────────────────────────────────────────────────────────────────────────┐
+  │         方法          │                                         说明                                          │
+  ├───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────┤
+  │ __init__()            │ 启动 llm_proxy 子进程、等健康检查通过、初始化 agent workspace                         │
+  ├───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────┤
+  │ execute()             │ 完整 rollout 流水线：重置 session → 调用 agent_chat → dump session → 读取 ChatML 输出 │
+  ├───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────┤
+  │ reset_session()       │ 向 proxy 发送 /newsession 切换 session                                                │
+  ├───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────┤
+  │ read_session_output() │ 从指定目录读取 .chatml.json / .json 文件                                              │
+  ├───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────┤
+  │ shutdown()            │ SIGTERM 停止 proxy（触发其 dump session 后退出）                                      │
+  ├───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────┤
+  │ __enter__/__exit__    │ 上下文管理器支持，确保退出时清理                                                      │
+  └───────────────────────┴───────────────────────────────────────────────────────────────────────────────────────┘
+
+  关键属性：proxy_url、proxy_pid、proxy_port、out_root
+
+  Proxy 管理
+
+  - 在 llm_proxy_chatml/ 目录下启动子进程（preexec_fn=os.setsid 创建独立进程组）
+  - 轮询 /proxyhealth 直至就绪（超时可配置）
+  - shutdown 发送 SIGTERM 到进程组，必要时 fallback 到 SIGKILL
+  - 端口/上游 URL/API key/日志目录等均可在构造函数中覆盖
+
+  CLI (__main__)
+
+  python agent_rollout.py -a jiuwenclaw -o ./runs -p "your prompt" --tee
+  支持参数：--agent, --workspace-dir, --prompt, --timeout, --tee, --dry-run, --proxy-port, --proxy-base-url, --chat-id, --session-name 等。
+  
+  向后兼容
+
+  agent_pinchbench.py 中 from agent_rollout import * 使用的所有符号 (load_agent_skill_path, init_agent, reset_session_name, run_agent_chat)
+  均保持不变。
+
+
+● 函数实现完成。总结：
+
+  split_chatml_turns(session: dict) -> list[dict]
+
+  位于 agent_rollout.py:189，独立函数（不在 class 内部）。
+
+  切分规则： 在每个 assistant 消息处切一刀，返回累积前缀 dict。每个输出 dict 包含：
+  - messages：从开头到第 n 个 assistant（含）的全部消息
+  - tools：完整的 tools 定义
+  - 不含 remarks
+
+  示例（上面测试的 4-assistant 场景）：
+
+  输入: sys → user → A1 → user → A2(tool_calls) → tool → A3 → user → A4
+
+  输出 4 个 dict:
+    Turn 1: sys, user, A1                                    ← 第一轮问答
+    Turn 2: sys, user, A1, user, A2(tool_calls)               ← 工具调用请求
+    Turn 3: sys, user, A1, user, A2, tool, A3                 ← 工具调用完成
+    Turn 4: sys, user, A1, user, A2, tool, A3, user, A4      ← 完整对话
+
+  这种逐 assistant 切分的方式适合 RL 训练 — 每个 assistant 决策点都是一个训练样本。

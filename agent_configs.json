@@ -7,5 +7,11 @@
         "default_skill_path": "/home/sagaera/.openclaw/skills/",
         "skill_path": "./pinchbench_runs/openclaw/workspace/skills/"
     },
+    "claudecode": {
+        "skill_path": "/home/sagaera/.claude/skills/"
+    },
+    "opencode": {
+        "skill_path": "/home/sagaera/.config/opencode/skills/"
+    },
     "README": "这个文件用于agent_pinchbench注入skill提示词以及skill_manager备份多版本skills。"
 }

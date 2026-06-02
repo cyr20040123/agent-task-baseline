@@ -9,6 +9,10 @@ clean_runs.sh
 pinchbench_exec_history.csv
 *.log
 *log*/
+*opencode_output*
+sample_trajectory/
+test/
+jiuwenclaw_chat.log
 
 __pycache__
 *.pyc

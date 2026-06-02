@@ -62,7 +62,7 @@ def files_are_equal(file1: str, file2: str, chunk_size: int = 8192) -> bool:
     return hasher1.hexdigest() == hasher2.hexdigest()
 
 
-def compare_directories(path1: str, path2: str) -> Tuple[List[Tuple[str, str]], List[str], List[str]]:
+def compare_directories(path1: str, path2: str) -> Tuple[List[Tuple[str, str, str]], List[str], List[str]]:
     """
     对比两个目录中相对路径相同的文件内容
     

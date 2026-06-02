@@ -27,6 +27,22 @@ def _normalize_tool_calls(tool_calls):
     return result
 
 
+def _normalize_msg_arguments(msg: dict) -> dict:
+    """Mutate *msg* in-place: convert tool_calls arguments from JSON string to dict."""
+    tcs = msg.get("tool_calls")
+    if not tcs:
+        return msg
+    for tc in tcs:
+        func = tc.get("function", {})
+        args = func.get("arguments")
+        if isinstance(args, str):
+            try:
+                func["arguments"] = json.loads(args)
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return msg
+
+
 # Fields used for matching — only standard OpenAI message fields.
 # Model-specific extras (reasoning, refusal, annotations, audio, etc.)
 # are excluded so that the client's echoed messages match responses.
@@ -161,6 +177,7 @@ class SessionManager:
                 ts = ""
             else:
                 ts = timestamp if i == len(request_messages) - 1 else ""
+            _normalize_msg_arguments(msg)
             session["messages"].append({**msg, "timestamp": ts})
         self.sessions.append(session)
         return session
@@ -172,6 +189,7 @@ class SessionManager:
         new_msgs = request_messages[match_len:]
         ts = "" if self.mode == "single" else timestamp
         for msg in new_msgs:
+            _normalize_msg_arguments(msg)
             session["messages"].append({**msg, "timestamp": ts})
         if tools:
             known = {t.get("function", {}).get("name") for t in session["tools"]}
@@ -184,6 +202,7 @@ class SessionManager:
     def append_response(self, session, response_message, timestamp):
         """Append an assistant response message.  Timestamp omitted in 'single' mode."""
         ts = "" if self.mode == "single" else timestamp
+        _normalize_msg_arguments(response_message)
         session["messages"].append({**response_message, "timestamp": ts})
 
     # ------------------------------------------------------------------

@@ -24,11 +24,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 import csv
+import logging
 
-from agent_call.jiuwenclaw_chat import jiuwenclaw_chat
-from agent_call.openclaw_chat import openclaw_chat, openclaw_init_agent
-from agent_call.opencode_chat import opencode_chat
+logger = logging.getLogger(__name__)
+
+# from agent_call.jiuwenclaw_chat import jiuwenclaw_chat
+# from agent_call.openclaw_chat import openclaw_chat, openclaw_init_agent
+# from agent_call.opencode_chat import opencode_chat
 from pinchbench_task_parser import PinchbenchTaskParser
+from agent_rollout import *
 
 CSV_HISTORY_FILE = "pinchbench_exec_history.csv"
 CSV_HEADERS = ["timestamp", "command", "agent", "task_score", "full_score", "remarks"]
@@ -58,9 +62,7 @@ _SCORE_LINE_RE = re.compile(
 )
 
 PROMPTS_PATH = Path(__file__).resolve().with_name("prompts.json")
-AGENT_CONFIGS_PATH = Path(__file__).resolve().with_name("agent_configs.json")
-OPENCODE_EVALUATION_PROMPT_KEY = "opencode_evaluation_prompt_en"
-NAIVE_SKILL_EVOLUTION_PROMPT_KEY = "naive_skill_evolution_prompt"
+# AGENT_CONFIGS_PATH = Path(__file__).resolve().with_name("agent_configs.json")
 
 
 def parse_task_score_from_opencode_output(text: str) -> tuple[float | None, float | None]:
@@ -101,82 +103,82 @@ def load_prompt_template(
     return value
 
 
-def load_agent_skill_path(agent_name: str, config_path: Path = AGENT_CONFIGS_PATH) -> str:
-    """从 agent_configs.json 读取指定 agent 的 skill_path。"""
-    try:
-        data = json.loads(config_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        raise ValueError(f"agent_configs.json 无法解析: {config_path}") from e
-    if not isinstance(data, dict):
-        raise ValueError(f"agent_configs.json 顶层必须是对象: {config_path}")
-    entry = data.get(agent_name)
-    if not isinstance(entry, dict):
-        raise ValueError(f"agent_configs.json 缺少 agent 配置: {agent_name}")
-    skill_path = entry.get("skill_path")
-    if not isinstance(skill_path, str) or not skill_path:
-        raise ValueError(f"agent_configs.json 缺少 skill_path: {agent_name}")
-    if (skill_path.endswith("/")):
-        skill_path = skill_path[:-1]
-    return skill_path
+# def load_agent_skill_path(agent_name: str, config_path: Path = AGENT_CONFIGS_PATH) -> str:
+#     """从 agent_configs.json 读取指定 agent 的 skill_path。"""
+#     try:
+#         data = json.loads(config_path.read_text(encoding="utf-8"))
+#     except json.JSONDecodeError as e:
+#         raise ValueError(f"agent_configs.json 无法解析: {config_path}") from e
+#     if not isinstance(data, dict):
+#         raise ValueError(f"agent_configs.json 顶层必须是对象: {config_path}")
+#     entry = data.get(agent_name)
+#     if not isinstance(entry, dict):
+#         raise ValueError(f"agent_configs.json 缺少 agent 配置: {agent_name}")
+#     skill_path = entry.get("skill_path")
+#     if not isinstance(skill_path, str) or not skill_path:
+#         raise ValueError(f"agent_configs.json 缺少 skill_path: {agent_name}")
+#     if (skill_path.endswith("/")):
+#         skill_path = skill_path[:-1]
+#     return skill_path
 
 
-def run_agent_chat(
-    *,
-    agent: str,
-    prompt: str,
-    run_chat_id: str,
-    timeout: float,
-    cwd: Path,
-    output: str,
-    tee: bool,
-    reset_workspace: bool,
-    dry_run: bool = False,
-) -> Any:
-    if dry_run:
-        print(f"[Dry Run] agent={agent} chat_id={run_chat_id} output={output}")
-        print("[Dry Run] -------------- prompt ----------------")
-        print(prompt)
-        return SimpleNamespace(
-            chat_id=run_chat_id,
-            output_path=Path(output),
-            complete_response="",
-            returncode=0
-        )
-    if agent == "jiuwenclaw":
-        return jiuwenclaw_chat(
-            prompt=prompt,
-            chat_id=run_chat_id,
-            timeout=timeout,
-            cwd=cwd,
-            output=output,
-            tee=tee,
-            reset_workspace=reset_workspace,
-        )
-    elif agent == "opencode":
-        return opencode_chat(
-            prompt=prompt,
-            cwd=cwd,
-            timeout=timeout,
-            output=output,
-            tee=tee,
-        )
-    return openclaw_chat(
-        prompt=prompt,
-        chat_id=run_chat_id,
-        agent="pinchbench",
-        # session_id=run_chat_id,
-        timeout=timeout,
-        cwd=cwd,
-        output=output,
-        tee=tee,
-    )
+# def run_agent_chat(
+#     *,
+#     agent: str,
+#     prompt: str,
+#     run_chat_id: str,
+#     timeout: float,
+#     cwd: Path,
+#     output: str,
+#     tee: bool,
+#     reset_workspace: bool,
+#     dry_run: bool = False,
+# ) -> Any:
+#     if dry_run:
+#         print(f"[Dry Run] agent={agent} chat_id={run_chat_id} output={output}")
+#         print("[Dry Run] -------------- prompt ----------------")
+#         print(prompt)
+#         return SimpleNamespace(
+#             chat_id=run_chat_id,
+#             output_path=Path(output),
+#             complete_response="",
+#             returncode=0
+#         )
+#     if agent == "jiuwenclaw":
+#         return jiuwenclaw_chat(
+#             prompt=prompt,
+#             chat_id=run_chat_id,
+#             timeout=timeout,
+#             cwd=cwd,
+#             output=output,
+#             tee=tee,
+#             reset_workspace=reset_workspace,
+#         )
+#     elif agent == "opencode":
+#         return opencode_chat(
+#             prompt=prompt,
+#             cwd=cwd,
+#             timeout=timeout,
+#             output=output,
+#             tee=tee,
+#         )
+#     return openclaw_chat(
+#         prompt=prompt,
+#         chat_id=run_chat_id,
+#         agent="pinchbench",
+#         # session_id=run_chat_id,
+#         timeout=timeout,
+#         cwd=cwd,
+#         output=output,
+#         tee=tee,
+#     )
 
 
 def opencode_evaluation(
     task_description_file: Path | str,
     task_output_dir: Path | str,
     *,
-    run_id: str,
+    run_id: str = "run001",
     timeout: float | None = 600.0,
     tee: bool = False,
     dry_run: bool = False,
@@ -189,12 +191,7 @@ def opencode_evaluation(
 
     desc_abs = str(Path(task_description_file).expanduser().resolve())
     out_abs = str(Path(task_output_dir).expanduser().resolve())
-    judge_prompt = load_prompt_template(OPENCODE_EVALUATION_PROMPT_KEY, replace_dict={"task_description_file": str(desc_abs), "task_output_dir": str(out_abs)})
-    # judge_prompt = (
-    #     judge_prompt_cn.replace("<task_description_file>", desc_abs).replace(
-    #         "<task_output_dir>", out_abs
-    #     )
-    # )
+    judge_prompt = load_prompt_template("opencode_evaluation_prompt_en", replace_dict={"task_description_file": str(desc_abs), "task_output_dir": str(out_abs)})
     eval_out = Path(task_output_dir).expanduser().resolve() / f"{run_id}_opencode_eval.txt"
     
     if dry_run:
@@ -222,20 +219,8 @@ def opencode_evaluation(
     
     return task_score, full_score, result
 
-def reset_session_name(url, new_name, session_path=None):
-    if session_path:
-        cmd = f"curl -X POST {url}/newsession -H 'Content-Type: application/json' -d '{{\"session_name\": \"{new_name}\", \"session_path\": \"{session_path}\"}}'"
-    else:
-        cmd = f"curl -X POST {url}/newsession -H 'Content-Type: application/json' -d '{{\"session_name\": \"{new_name}\"}}'"
-    try:
-        os.system(cmd)
-    except Exception as e:
-        print(f"Error occurred while resetting session name: {e}", file=sys.stderr)
 
-
-def main() -> int:
-    command = " ".join(sys.argv)
-
+def parse_args():
     parser = argparse.ArgumentParser(
         description="从任务描述 .md 提取 ## Prompt，逐个调用 agent_chat；"
         "每任务完成后用 opencode_chat 评分（cwd 为运行本脚本时的当前工作目录）。"
@@ -305,29 +290,47 @@ def main() -> int:
         metavar="SEC",
         help="单次 opencode 评分子进程超时秒数（默认 600）",
     )
-    args = parser.parse_args()
+    return parser.parse_args()
 
+
+# def init_agent(args):
+#     skill_path = load_agent_skill_path(args.agent)
+#     if args.agent == "openclaw":
+#         # openclaw比较特殊，只能在workspace中写入，所以要调整output_dir的路径，先构造一个新的workspace，再将output_dir放在workspace下
+#         print("设置 openclaw workspace ...")
+#         workspace_root = Path(skill_path).parent # skill_path的上级目录
+#         openclaw_init_agent(agent_name="pinchbench", workspace_path=str(workspace_root), reset=False)
+#         # 如果args.output_dir是相对路径，则以workspace_root为基准，如果是绝对路径，则将其加在workspace_root后
+#         if args.output_dir.is_absolute():
+#             out_root = workspace_root / args.output_dir.relative_to("/")
+#         elif args.output_dir.is_relative_to(Path.cwd()):
+#             out_root = workspace_root / args.output_dir.relative_to(Path.cwd())
+#         else:
+#             out_root = workspace_root / args.output_dir
+#             print(f"Warning: output_dir {args.output_dir} is not absolute and not relative to current working directory; using it as relative to workspace root", file=sys.stderr)
+#             print(f"Resolved output root: {out_root}", file=sys.stderr)
+#         out_root = out_root.expanduser().resolve()
+#         # workspace_root = workspace_root.expanduser().resolve()
+#     else:
+#         # 而jiuwenclaw则不受限制，直接使用output_dir即可
+#         out_root = args.output_dir.expanduser().resolve() # change to absolute path
+#         # workspace_root = Path("./").expanduser().resolve()
+#     out_root.mkdir(parents=True, exist_ok=True)
+#     return out_root
+
+
+def main() -> int:
+    command = " ".join(sys.argv)
+    args = parse_args()
+    
     skill_path = load_agent_skill_path(args.agent)
-    if args.agent == "openclaw":
-        print("设置 openclaw workspace ...")
-        workspace_root = Path(skill_path).parent # skill_path的上级目录
-        openclaw_init_agent(agent_name="pinchbench", workspace_path=workspace_root, reset=False)
-        # 如果args.output_dir是相对路径，则以workspace_root为基准，如果是绝对路径，则将其加在workspace_root后
-        if args.output_dir.is_absolute():
-            out_root = workspace_root / args.output_dir.relative_to("/")
-        elif args.output_dir.is_relative_to(Path.cwd()):
-            out_root = workspace_root / args.output_dir.relative_to(Path.cwd())
-        else:
-            out_root = workspace_root / args.output_dir
-            print(f"Warning: output_dir {args.output_dir} is not absolute and not relative to current working directory; using it as relative to workspace root", file=sys.stderr)
-            print(f"Resolved output root: {out_root}", file=sys.stderr)
-        out_root = out_root.expanduser().resolve()
-        # workspace_root = workspace_root.expanduser().resolve()
-    else:
-        out_root = args.output_dir.expanduser().resolve() # change to absolute path
-        # workspace_root = Path("./").expanduser().resolve()
-    out_root.mkdir(parents=True, exist_ok=True)
+    out_root = init_agent(args.agent, args.output_dir)
     print(f"输出根目录: {out_root}") # | 工作目录: {workspace_root}")
+
+    # output to log file:
+    log_path = Path(out_root) / f"pinchbench_run_{datetime.now().strftime('%m%d_%H%M%S')}.log"
+    # log_path.parent.mkdir(parents=True, exist_ok=True) # created in init_agent already
+    logging.basicConfig(level=logging.INFO, handlers=[logging.FileHandler(log_path), logging.StreamHandler()])
     
     task_parser = PinchbenchTaskParser(
         asset_root=args.asset_root,
@@ -343,7 +346,7 @@ def main() -> int:
     exit_code = 0
     i = 0
     score_rows: list[tuple[float, float]] = []
-    openclaw_runs = 0
+    agent_runs = 0
     for md_path in md_files:
         i += 1
         stem = md_path.stem
@@ -377,7 +380,6 @@ def main() -> int:
         if args.agent == "openclaw":
             prompt += load_prompt_template(
                 "change_openclaw_workspace_prompt",
-                # replace_dict={"workspace_path": str(sub.relative_to(workspace_root))},
                 replace_dict={"workspace_path": str(sub)},
             )
         else:
@@ -388,10 +390,6 @@ def main() -> int:
         prompt += task_prompt
 
         reset_session_name("http://localhost:8088", f"{skill_name}_{when.strftime('%m%d_%H%M%S')}", sub)
-
-        # if (args.dry_run):
-        #     print(f"[提示词] {prompt}")
-        #     continue
 
         run_chat_id = make_chat_id()
         try:
@@ -420,7 +418,7 @@ def main() -> int:
             if r.returncode == 124:
                 print("注意：子进程已超时，输出可能不完整", file=sys.stderr)
 
-        openclaw_runs += 1
+        agent_runs += 1
         if (not args.skip_eval):
             print("[评分] 调用 opencode …")
             try:
@@ -461,7 +459,7 @@ def main() -> int:
                     if args.skill_evolve == "naive":
                         # option 1. refer to the judge's output file 
                         # evolve_prompt = load_prompt_template(
-                        #     NAIVE_SKILL_EVOLUTION_PROMPT_KEY,
+                        #     "naive_skill_evolution_prompt",
                         #     replace_dict={
                         #         "task_evaluation_file": str(ocr.output_path),
                         #         "skill_path": skill_path,
@@ -521,13 +519,13 @@ def main() -> int:
         total_s = sum(s for s, _ in score_rows)
         total_f = sum(f for _, f in score_rows)
         print(f"\n[本批评分汇总] 总分 {total_s:g} / 满分 {total_f:g}")
-        if openclaw_runs > len(score_rows):
+        if agent_runs > len(score_rows):
             print(
-                f"[本批评分汇总] 提示：共 {openclaw_runs} 次 openclaw 运行，"
+                f"[本批评分汇总] 提示：共 {agent_runs} 次 agent 运行，"
                 f"仅 {len(score_rows)} 次解析到有效分数。",
                 file=sys.stderr,
             )
-    elif not args.skip_eval and openclaw_runs > 0:
+    elif not args.skip_eval and agent_runs > 0:
         print(
             "\n[本批评分汇总] 未能汇总：没有任何任务解析到 TASK_SCORE / FULL_SCORE。",
             file=sys.stderr,
@@ -546,7 +544,7 @@ def main() -> int:
         elif field == "full_score":
             csv_row[field] = total_f if score_rows else ""
         elif field == "remarks":
-            csv_row[field] = f"{i} tasks, {openclaw_runs} openclaw runs, {len(score_rows)} scored" if openclaw_runs > 0 else ""
+            csv_row[field] = f"{i} tasks, {agent_runs} agent runs, {len(score_rows)} scored" if agent_runs > 0 else ""
 
     # Write the CSV row to the history file
     with open(CSV_HISTORY_FILE, "a", newline="") as f:

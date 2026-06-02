@@ -84,6 +84,7 @@ def opencode_chat(
     cid = chat_id or make_chat_id()
     out_path = resolve_output_path(output, cid)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    print("Opencode 将在此输出临时文件：", out_path)
 
     cwd_path = Path(cwd).expanduser().resolve() if cwd is not None else Path.cwd()
     cwd_path.mkdir(parents=True, exist_ok=True)

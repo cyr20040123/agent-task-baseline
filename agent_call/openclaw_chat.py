@@ -223,7 +223,7 @@ def _cli() -> int:
             prompt_file=args.prompt_file,
             cwd=args.cwd,
             chat_id=args.session_id,
-            session_id=args.session_id,
+            # session_id=args.session_id,
             agent=args.agent,
             thinking=args.thinking,
             output=args.output,
@@ -243,7 +243,7 @@ def _cli() -> int:
         return 1
 
     print(f"chat_id={r.chat_id}")
-    print(f"session_id={r.session_id}")
+    # print(f"session_id={r.session_id}")
     print(f"output={r.output_path}")
     print(f"returncode={r.returncode}")
     if r.returncode == 124:

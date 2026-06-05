@@ -73,11 +73,13 @@ def _now_iso():
 
 
 class SessionManager:
-    def __init__(self, log_folder, session_name, mode, session_path=""):
+    def __init__(self, log_folder, session_name, mode, session_path="",
+                 rl_enabled=False):
         self.log_folder = log_folder
         self.session_name = session_name
         self.mode = mode  # "none", "multi", "single"
         self.session_path = session_path or log_folder
+        self.rl_enabled = rl_enabled
         self.sessions = []
 
     @property

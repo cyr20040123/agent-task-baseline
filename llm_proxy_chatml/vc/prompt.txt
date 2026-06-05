@@ -1,3 +1,5 @@
+（大模型人工智能Agent不要读此文件） 
+
 用python实现openai请求格式兼容的大模型调用转发记录llm proxy项目，实现请求/响应转发。A向本proxy发送的请求转发到B，B回复响应到本proxy再转发回A，支持流式与非流式请求。
 参数使用configargparse管理，用于把上一次运行的参数保存到llm_proxy.ini文件，后续执行时未在命令行中指定的参数从配置文件读取，在命令行指定的参数更新到配置文件。
 建议使用fastapi库，使用简洁轻量的实现方法。
@@ -67,3 +69,44 @@
 
 ==== 测试验证相关 ====
 我已经在localhost:8030端口部署了大模型服务，模型是Qwen/Qwen3.5-4B，支持工具调用，建议写一个测试脚本，便于写好llm proxy之后通过这个脚本和服务来进行测试验证，确保实现正确无误。
+
+
+==== 0602 ====
+给llm_proxy增加参数--temperature，默认为-1，如果为非负值且请求中不包含"temperature"字段时，在转发的请求中增加"temperature"字段。
+
+● 改动完成。总结一下做了什么：
+
+  llm_proxy.py — 3 处改动：
+  1. 新增 --temperature 参数，type=float，默认 -1.0
+  2. 在 _save_config 中把 temperature 写入 [RECENT] 节
+  3. 将 args.temperature 传入 create_app()
+
+  proxy_server.py — 3 处改动：
+  1. create_app() 新增 temperature_arg: float = -1.0 参数，捕获为闭包变量 temperature_default
+  2. 新增 _inject_temperature(body, temperature_default) 辅助函数：当 temperature_default >= 0 且 body 中没有 "temperature" 字段时，注入该值
+  3. 在 _handle_chat_completions 和 _handle_completions 中读取请求体后立即调用
+
+  行为：默认 -1.0 时什么都不做（向后兼容）；设为非负值（如 --temperature 0.7）时，只要上游请求不带 temperature 字段，代理就会自动注入。
+
+==== 0603 ====
+给llm_proxy增加参数--rl，如果启用则记录chatml时增加适配RL的相关信息。
+具体来说如果--rl启用，则在--log-chatml为single或者multi时，在大模型每条响应处与"timestamp"同级增加"prompt_ids"(list),"completion_ids"(list),"logprobs"(list)字段。
+logprobs、prompt_ids和completion_ids如何获取：通过在转发的大模型请求中增加"logprobs": true、"return_token_ids": true，然后从响应中获取。
+例如：
+curl http://localhost:8030/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3.5-4B",
+    "messages": [
+      {
+        "role": "user",
+        "content": "苹果通常是什么颜色，一个词回答"
+      }
+    ],
+    "logprobs": true,
+    "return_token_ids": true
+  }'
+然后可以得到如0603-3-think.pretty.json中所示的返回结果。
+prompt_ids从"prompt_token_ids"字段直接获取；logprobs表示生成部分每个token的logprob值，从"logprobs"中的每个token的"logprob"字段获取；completion_ids从与"logprobs"同级的"token_ids"字段直接获取。
+我暂时还没部署大模型服务，你写完代码以后用静态数据0603-4-no-think.pretty.json验证一下即可。
+

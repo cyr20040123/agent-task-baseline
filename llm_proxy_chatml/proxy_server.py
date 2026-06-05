@@ -29,6 +29,13 @@ def _strip_openai_key(body: dict) -> dict:
     return d
 
 
+def _inject_temperature(body: dict, temperature_default: float) -> None:
+    """Inject 'temperature' into *body* if default is non-negative and the
+    body does not already contain a 'temperature' key."""
+    if temperature_default >= 0 and "temperature" not in body:
+        body["temperature"] = temperature_default
+
+
 # ---------------------------------------------------------------------------
 # SSE reconstruction helpers
 # ---------------------------------------------------------------------------
@@ -58,6 +65,8 @@ def _reconstruct_chat_response(chunks: list[bytes]) -> dict | None:
                 collected["model"] = obj["model"]
             if "usage" in obj and obj["usage"]:
                 collected["usage"] = obj["usage"]
+            if "prompt_token_ids" in obj:
+                collected["prompt_token_ids"] = obj["prompt_token_ids"]
             for choice in obj.get("choices", []):
                 idx = choice.get("index", 0)
                 if "choices" not in collected:
@@ -95,6 +104,13 @@ def _reconstruct_chat_response(chunks: list[bytes]) -> dict | None:
                             tc_map[tci]["function"]["arguments"] += tc["function"]["arguments"]
                 if choice.get("finish_reason"):
                     c["finish_reason"] = choice["finish_reason"]
+                # --- accumulate RL fields from streaming chunks ---
+                if "token_ids" in choice:
+                    c.setdefault("token_ids", []).extend(choice["token_ids"])
+                if "logprobs" in choice and choice["logprobs"]:
+                    c.setdefault("_logprobs_content", [])
+                    c["_logprobs_content"].extend(
+                        choice["logprobs"].get("content", []))
     if "choices" not in collected:
         return None
     # Clean up: content → null when only tool_calls are present (no text, no reasoning)
@@ -129,6 +145,8 @@ def _reconstruct_completion_response(chunks: list[bytes]) -> dict | None:
                 collected["model"] = obj["model"]
             if "usage" in obj and obj["usage"]:
                 collected["usage"] = obj["usage"]
+            if "prompt_token_ids" in obj:
+                collected["prompt_token_ids"] = obj["prompt_token_ids"]
             for choice in obj.get("choices", []):
                 idx = choice.get("index", 0)
                 if "choices" not in collected:
@@ -138,6 +156,14 @@ def _reconstruct_completion_response(chunks: list[bytes]) -> dict | None:
                 collected["choices"][idx]["text"] += choice.get("text", "")
                 if choice.get("finish_reason"):
                     collected["choices"][idx]["finish_reason"] = choice["finish_reason"]
+                # --- accumulate RL fields from streaming chunks ---
+                if "token_ids" in choice:
+                    collected["choices"][idx].setdefault("token_ids", []).extend(
+                        choice["token_ids"])
+                if "logprobs" in choice and choice["logprobs"]:
+                    collected["choices"][idx].setdefault("_logprobs_content", [])
+                    collected["choices"][idx]["_logprobs_content"].extend(
+                        choice["logprobs"].get("content", []))
     if "choices" not in collected:
         return None
     return collected
@@ -146,9 +172,11 @@ def _reconstruct_completion_response(chunks: list[bytes]) -> dict | None:
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
-def create_app(base_url: str, api_key: str, session_manager: SessionManager) -> FastAPI:
+def create_app(base_url: str, api_key: str, session_manager: SessionManager,
+               temperature_arg: float = -1.0) -> FastAPI:
     app = FastAPI()
     upstream = base_url.rstrip("/")
+    temperature_default = temperature_arg  # capture for handler closures
 
     # --- /proxyhealth ---
     @app.get("/proxyhealth")
@@ -180,12 +208,14 @@ def create_app(base_url: str, api_key: str, session_manager: SessionManager) -> 
     # --- /v1/chat/completions ---
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request):
-        return await _handle_chat_completions(request, upstream, api_key, session_manager)
+        return await _handle_chat_completions(request, upstream, api_key, session_manager,
+                                              temperature_default)
 
     # --- /v1/completions ---
     @app.post("/v1/completions")
     async def completions(request: Request):
-        return await _handle_completions(request, upstream, api_key, session_manager)
+        return await _handle_completions(request, upstream, api_key, session_manager,
+                                         temperature_default)
 
     # --- catch-all ---
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
@@ -199,8 +229,10 @@ def create_app(base_url: str, api_key: str, session_manager: SessionManager) -> 
 # Chat completions handler
 # ---------------------------------------------------------------------------
 async def _handle_chat_completions(request: Request, upstream: str, api_key: str,
-                                  session_mgr: SessionManager):
+                                  session_mgr: SessionManager,
+                                  temperature_default: float = -1.0):
     body = await request.json()
+    _inject_temperature(body, temperature_default)
     messages = body.get("messages", [])
     tools = body.get("tools")
     is_stream = body.get("stream", False)
@@ -212,6 +244,11 @@ async def _handle_chat_completions(request: Request, upstream: str, api_key: str
         session = session_mgr.create_session(messages, req_ts, tools)
     else:
         session_mgr.append_request_messages(session, messages, match_len, req_ts, tools)
+
+    # --- inject RL parameters ---
+    if session_mgr.rl_enabled and session_mgr.enabled:
+        body.setdefault("logprobs", True)
+        body.setdefault("return_token_ids", True)
 
     # --- forward to upstream ---
     headers = _build_upstream_headers(request, api_key)
@@ -238,8 +275,16 @@ async def _handle_chat_completions(request: Request, upstream: str, api_key: str
 # Completions handler (legacy)
 # ---------------------------------------------------------------------------
 async def _handle_completions(request: Request, upstream: str, api_key: str,
-                              session_mgr: SessionManager):
+                              session_mgr: SessionManager,
+                              temperature_default: float = -1.0):
     body = await request.json()
+    _inject_temperature(body, temperature_default)
+
+    # --- inject RL parameters ---
+    if session_mgr.rl_enabled and session_mgr.enabled:
+        body.setdefault("logprobs", True)
+        body.setdefault("return_token_ids", True)
+
     prompt = body.get("prompt", "")
     is_stream = body.get("stream", False)
     req_ts = _now_iso()
@@ -374,20 +419,51 @@ def _record_chat_response(session_mgr: SessionManager, session: dict,
                           resp_body: dict, timestamp: str):
     if not session_mgr.enabled:
         return
+    prompt_ids = resp_body.get("prompt_token_ids")
     for choice in resp_body.get("choices", []):
         msg = choice.get("message", {})
         if msg:
-            session_mgr.append_response(session, dict(msg), timestamp)
+            msg = dict(msg)
+            if session_mgr.rl_enabled:
+                if prompt_ids is not None:
+                    msg["prompt_ids"] = prompt_ids
+                # Completion token ids — from non-streaming or reconstructed streaming
+                token_ids = choice.get("token_ids")
+                if token_ids is not None:
+                    msg["completion_ids"] = token_ids
+                # Logprobs — from non-streaming response
+                logprobs = choice.get("logprobs")
+                if logprobs and logprobs.get("content"):
+                    msg["logprobs"] = [item["logprob"] for item in logprobs["content"]]
+                # Logprobs — from reconstructed streaming (accumulated via _logprobs_content)
+                lp_content = choice.get("_logprobs_content")
+                if lp_content:
+                    msg["logprobs"] = [item["logprob"] for item in lp_content]
+            session_mgr.append_response(session, msg, timestamp)
 
 
 def _record_completion_response(session_mgr: SessionManager, session: dict,
                                 resp_body: dict, timestamp: str):
     if not session_mgr.enabled:
         return
+    prompt_ids = resp_body.get("prompt_token_ids")
     for choice in resp_body.get("choices", []):
         text = choice.get("text", "")
         if text:
-            session_mgr.append_response(session, {"role": "assistant", "content": text}, timestamp)
+            msg = {"role": "assistant", "content": text}
+            if session_mgr.rl_enabled:
+                if prompt_ids is not None:
+                    msg["prompt_ids"] = prompt_ids
+                token_ids = choice.get("token_ids")
+                if token_ids is not None:
+                    msg["completion_ids"] = token_ids
+                logprobs = choice.get("logprobs")
+                if logprobs and logprobs.get("content"):
+                    msg["logprobs"] = [item["logprob"] for item in logprobs["content"]]
+                lp_content = choice.get("_logprobs_content")
+                if lp_content:
+                    msg["logprobs"] = [item["logprob"] for item in lp_content]
+            session_mgr.append_response(session, msg, timestamp)
 
 
 # ---------------------------------------------------------------------------

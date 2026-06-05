@@ -20,17 +20,26 @@ def parse_args():
         auto_env_var_prefix="LLM_PROXY_",
         description="OpenAI-compatible LLM proxy with ChatML logging",
     )
-    parser.add("--host", default="0.0.0.0", help="Proxy listen host")
-    parser.add("--port", default=8030, type=int, help="Proxy listen port")
-    parser.add("--base-url", required=True, help="Upstream LLM service base URL")
-    parser.add("--api-key", default="", help="Upstream API key")
-    parser.add("--log-folder", default="./logs/", help="Log and output directory")
-    parser.add("--log-chatml", choices=["none", "multi", "single"], default="none",
+    parser.add_argument("--host", default="0.0.0.0", help="Proxy listen host")
+    parser.add_argument("--port", default=8030, type=int, help="Proxy listen port")
+    parser.add_argument("--base-url", required=True, help="Upstream LLM service base URL")
+    parser.add_argument("--api-key", default="", help="Upstream API key")
+    parser.add_argument("--log-folder", default="./logs/", help="Log and output directory")
+    parser.add_argument("--log-chatml", choices=["none", "multi", "single"], default="none",
                help="ChatML recording mode: none (disabled), multi (prefix-matched "
                "multi-turn), single (one entry per request)")
-    parser.add("--session-name", default=None, help="Initial session name")
-    parser.add("--session-path", default="",
+    parser.add_argument("--session-name", default=None, help="Initial session name")
+    parser.add_argument("--session-path", default="",
                help="ChatML output path (defaults to --log-folder)")
+    parser.add_argument("--temperature", default=-1.0, type=float,
+               help="Default temperature for upstream requests. "
+               "When non-negative and the request does not already contain "
+               "a 'temperature' field, the value is injected. "
+               "Default -1.0 (disabled).")
+    parser.add_argument("--rl", action="store_true", default=False,
+               help="Enable RL-specific ChatML logging. When enabled, "
+               "logprobs and token_ids are requested from upstream and "
+               "recorded alongside each assistant response.")
 
     args = parser.parse_args()
 
@@ -66,6 +75,8 @@ def _save_config(args, path, session_explicit):
         "api-key": args.api_key,
         "log-folder": args.log_folder,
         "log-chatml": str(args.log_chatml),
+        "temperature": str(args.temperature),
+        "rl": str(args.rl),
     }
     if session_explicit:
         recent["session-name"] = args.session_name
@@ -98,9 +109,9 @@ def main():
     logger = setup_logging(args.log_folder)
 
     session_mgr = SessionManager(args.log_folder, args.session_name, args.log_chatml,
-                                 args.session_path)
+                                 args.session_path, rl_enabled=args.rl)
 
-    app = create_app(args.base_url, args.api_key, session_mgr)
+    app = create_app(args.base_url, args.api_key, session_mgr, args.temperature)
 
     # Graceful shutdown — dump sessions
     def shutdown():

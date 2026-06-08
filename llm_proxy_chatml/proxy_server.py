@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 
@@ -43,127 +44,127 @@ def _reconstruct_chat_response(chunks: list[bytes]) -> dict | None:
     """Parse SSE chunks from a streaming /v1/chat/completions response
     and reconstruct a non-streaming response dict.  Returns None on parse
     failure."""
+    # Join all raw bytes before decoding so that SSE data lines split
+    # across aiter_bytes() chunk boundaries are not silently lost.
+    full_text = b"".join(chunks).decode("utf-8", errors="replace")
     collected = {}
-    for chunk in chunks:
-        text = chunk.decode("utf-8", errors="replace")
-        for line in text.splitlines():
-            line = line.strip()
-            if not line.startswith("data:"):
-                continue
-            payload = line[5:].strip()
-            if payload == "[DONE]":
-                continue
-            try:
-                obj = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            if "id" in obj:
-                collected.setdefault("id", obj["id"])
-            if "object" in obj:
-                collected.setdefault("object", obj["object"].replace(".chunk", ""))
-            if "model" in obj and "model" not in collected:
-                collected["model"] = obj["model"]
-            if "usage" in obj and obj["usage"]:
-                collected["usage"] = obj["usage"]
-            if "prompt_token_ids" in obj:
-                collected["prompt_token_ids"] = obj["prompt_token_ids"]
-            for choice in obj.get("choices", []):
-                idx = choice.get("index", 0)
-                if "choices" not in collected:
-                    collected["choices"] = []
-                while len(collected["choices"]) <= idx:
-                    collected["choices"].append({
-                        "index": idx,
-                        "message": {"role": "assistant", "content": ""},
-                        "finish_reason": None,
-                    })
-                c = collected["choices"][idx]
-                delta = choice.get("delta", {})
-                if delta.get("role"):
-                    c["message"]["role"] = delta["role"]
-                if delta.get("content"):
-                    c["message"]["content"] += delta["content"]
-                if delta.get("reasoning"):
-                    c["message"].setdefault("reasoning", "")
-                    c["message"]["reasoning"] += delta["reasoning"]
-                if delta.get("tool_calls"):
-                    tc_map = c["message"].setdefault("tool_calls", [])
-                    for tc in delta["tool_calls"]:
-                        tci = tc.get("index", 0)
-                        while len(tc_map) <= tci:
-                            tc_map.append({
-                                "id": "",
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""},
-                            })
-                        if tc.get("id"):
-                            tc_map[tci]["id"] = tc["id"]
-                        if tc.get("function", {}).get("name"):
-                            tc_map[tci]["function"]["name"] = tc["function"]["name"]
-                        if tc.get("function", {}).get("arguments"):
-                            tc_map[tci]["function"]["arguments"] += tc["function"]["arguments"]
-                if choice.get("finish_reason"):
-                    c["finish_reason"] = choice["finish_reason"]
-                # --- accumulate RL fields from streaming chunks ---
-                if "token_ids" in choice:
-                    c.setdefault("token_ids", []).extend(choice["token_ids"])
-                if "logprobs" in choice and choice["logprobs"]:
-                    c.setdefault("_logprobs_content", [])
-                    c["_logprobs_content"].extend(
-                        choice["logprobs"].get("content", []))
+    for line in full_text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload == "[DONE]":
+            continue
+        try:
+            obj = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if "id" in obj:
+            collected.setdefault("id", obj["id"])
+        if "object" in obj:
+            collected.setdefault("object", obj["object"].replace(".chunk", ""))
+        if "model" in obj and "model" not in collected:
+            collected["model"] = obj["model"]
+        if "usage" in obj and obj["usage"]:
+            collected["usage"] = obj["usage"]
+        if "prompt_token_ids" in obj:
+            collected["prompt_token_ids"] = obj["prompt_token_ids"]
+        for choice in obj.get("choices", []):
+            idx = choice.get("index", 0)
+            if "choices" not in collected:
+                collected["choices"] = []
+            while len(collected["choices"]) <= idx:
+                collected["choices"].append({
+                    "index": idx,
+                    "message": {"role": "assistant", "content": ""},
+                    "finish_reason": None,
+                })
+            c = collected["choices"][idx]
+            delta = choice.get("delta", {})
+            if delta.get("role"):
+                c["message"]["role"] = delta["role"]
+            if delta.get("content"):
+                c["message"]["content"] += delta["content"]
+            if delta.get("reasoning"):
+                c["message"].setdefault("reasoning", "")
+                c["message"]["reasoning"] += delta["reasoning"]
+            if delta.get("reasoning_content"):
+                c["message"].setdefault("reasoning_content", "")
+                c["message"]["reasoning_content"] += delta["reasoning_content"]
+            if delta.get("tool_calls"):
+                tc_map = c["message"].setdefault("tool_calls", [])
+                for tc in delta["tool_calls"]:
+                    tci = tc.get("index", 0)
+                    while len(tc_map) <= tci:
+                        tc_map.append({
+                            "id": "",
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        })
+                    if tc.get("id"):
+                        tc_map[tci]["id"] = tc["id"]
+                    if tc.get("function", {}).get("name"):
+                        tc_map[tci]["function"]["name"] = tc["function"]["name"]
+                    if tc.get("function", {}).get("arguments"):
+                        tc_map[tci]["function"]["arguments"] += tc["function"]["arguments"]
+            if choice.get("finish_reason"):
+                c["finish_reason"] = choice["finish_reason"]
+            # --- accumulate RL fields from streaming chunks ---
+            if "token_ids" in choice:
+                c.setdefault("token_ids", []).extend(choice["token_ids"])
+            if "logprobs" in choice and choice["logprobs"]:
+                c.setdefault("_logprobs_content", [])
+                c["_logprobs_content"].extend(
+                    choice["logprobs"].get("content", []))
     if "choices" not in collected:
         return None
-    # Clean up: content → null when only tool_calls are present (no text, no reasoning)
-    for c in collected.get("choices", []):
-        msg = c.get("message", {})
-        if msg.get("tool_calls") and not msg.get("content") and not msg.get("reasoning"):
-            msg["content"] = None
     return collected
 
 
 def _reconstruct_completion_response(chunks: list[bytes]) -> dict | None:
     """Parse SSE chunks from a streaming /v1/completions response."""
+    # Join all raw bytes before decoding so that SSE data lines split
+    # across aiter_bytes() chunk boundaries are not silently lost.
+    full_text = b"".join(chunks).decode("utf-8", errors="replace")
     collected = {}
-    for chunk in chunks:
-        text = chunk.decode("utf-8", errors="replace")
-        for line in text.splitlines():
-            line = line.strip()
-            if not line.startswith("data:"):
-                continue
-            payload = line[5:].strip()
-            if payload == "[DONE]":
-                continue
-            try:
-                obj = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            if "id" in obj:
-                collected.setdefault("id", obj["id"])
-            if "object" in obj:
-                collected.setdefault("object", obj["object"].replace(".chunk", ""))
-            if "model" in obj and "model" not in collected:
-                collected["model"] = obj["model"]
-            if "usage" in obj and obj["usage"]:
-                collected["usage"] = obj["usage"]
-            if "prompt_token_ids" in obj:
-                collected["prompt_token_ids"] = obj["prompt_token_ids"]
-            for choice in obj.get("choices", []):
-                idx = choice.get("index", 0)
-                if "choices" not in collected:
-                    collected["choices"] = []
-                while len(collected["choices"]) <= idx:
-                    collected["choices"].append({"text": "", "index": idx, "finish_reason": None})
-                collected["choices"][idx]["text"] += choice.get("text", "")
-                if choice.get("finish_reason"):
-                    collected["choices"][idx]["finish_reason"] = choice["finish_reason"]
-                # --- accumulate RL fields from streaming chunks ---
-                if "token_ids" in choice:
-                    collected["choices"][idx].setdefault("token_ids", []).extend(
-                        choice["token_ids"])
-                if "logprobs" in choice and choice["logprobs"]:
-                    collected["choices"][idx].setdefault("_logprobs_content", [])
-                    collected["choices"][idx]["_logprobs_content"].extend(
-                        choice["logprobs"].get("content", []))
+    for line in full_text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload == "[DONE]":
+            continue
+        try:
+            obj = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if "id" in obj:
+            collected.setdefault("id", obj["id"])
+        if "object" in obj:
+            collected.setdefault("object", obj["object"].replace(".chunk", ""))
+        if "model" in obj and "model" not in collected:
+            collected["model"] = obj["model"]
+        if "usage" in obj and obj["usage"]:
+            collected["usage"] = obj["usage"]
+        if "prompt_token_ids" in obj:
+            collected["prompt_token_ids"] = obj["prompt_token_ids"]
+        for choice in obj.get("choices", []):
+            idx = choice.get("index", 0)
+            if "choices" not in collected:
+                collected["choices"] = []
+            while len(collected["choices"]) <= idx:
+                collected["choices"].append({"text": "", "index": idx, "finish_reason": None})
+            collected["choices"][idx]["text"] += choice.get("text", "")
+            if choice.get("finish_reason"):
+                collected["choices"][idx]["finish_reason"] = choice["finish_reason"]
+            # --- accumulate RL fields from streaming chunks ---
+            if "token_ids" in choice:
+                collected["choices"][idx].setdefault("token_ids", []).extend(
+                    choice["token_ids"])
+            if "logprobs" in choice and choice["logprobs"]:
+                collected["choices"][idx].setdefault("_logprobs_content", [])
+                collected["choices"][idx]["_logprobs_content"].extend(
+                    choice["logprobs"].get("content", []))
     if "choices" not in collected:
         return None
     return collected
@@ -239,11 +240,15 @@ async def _handle_chat_completions(request: Request, upstream: str, api_key: str
     req_ts = _now_iso()
 
     # --- session matching ---
+    # Deep-copy messages before passing to session manager because
+    # _normalize_msg_arguments mutates tool_calls[].function.arguments
+    # from a JSON string to a dict in-place — which would corrupt the
+    # request body sent to DeepSeek.
     session, match_len = session_mgr.find_matching_session(messages)
     if session is None:
-        session = session_mgr.create_session(messages, req_ts, tools)
+        session = session_mgr.create_session(copy.deepcopy(messages), req_ts, tools)
     else:
-        session_mgr.append_request_messages(session, messages, match_len, req_ts, tools)
+        session_mgr.append_request_messages(session, copy.deepcopy(messages), match_len, req_ts, tools)
 
     # --- inject RL parameters ---
     if session_mgr.rl_enabled and session_mgr.enabled:
@@ -263,7 +268,16 @@ async def _handle_chat_completions(request: Request, upstream: str, api_key: str
         else:
             return await _nonstream_forward(url, headers, body, session_mgr, session)
     except httpx.HTTPStatusError as e:
-        logger.error("upstream error %s: %s", e.response.status_code, e.response.text[:500])
+        # Read streaming response body so we can log the error details.
+        try:
+            await e.response.aread()
+            upstream_text = e.response.text[:1000]
+        except Exception:
+            upstream_text = "<failed to read response body>"
+        logger.error("upstream error %s for %s: %s\n  request body: %s",
+                     e.response.status_code, url,
+                     upstream_text,
+                     json.dumps(body_stripped, ensure_ascii=False)[:2000])
         return Response(content=e.response.content, status_code=e.response.status_code,
                         headers=dict(e.response.headers))
     except Exception as e:
@@ -312,7 +326,16 @@ async def _handle_completions(request: Request, upstream: str, api_key: str,
         else:
             return await _nonstream_forward_completions(url, headers, body, session_mgr, session)
     except httpx.HTTPStatusError as e:
-        logger.error("upstream error %s: %s", e.response.status_code, e.response.text[:500])
+        # Read streaming response body so we can log the error details.
+        try:
+            await e.response.aread()
+            upstream_text = e.response.text[:1000]
+        except Exception:
+            upstream_text = "<failed to read response body>"
+        logger.error("upstream error %s for %s: %s\n  request body: %s",
+                     e.response.status_code, url,
+                     upstream_text,
+                     json.dumps(body, ensure_ascii=False)[:2000])
         return Response(content=e.response.content, status_code=e.response.status_code,
                         headers=dict(e.response.headers))
     except Exception as e:
@@ -368,13 +391,28 @@ async def _stream_forward(url: str, headers: dict,
                           body: dict, session_mgr: SessionManager, session: dict):
     chunks: list[bytes] = []
 
+    # Eagerly create the client and send the request so that HTTP errors
+    # (e.g. 400) are raised *before* we return the StreamingResponse —
+    # allowing the try/except in _handle_chat_completions to catch them.
+    client = httpx.AsyncClient(timeout=300)
+    resp = await client.send(
+        client.build_request("POST", url, json=body, headers=headers),
+        stream=True,
+    )
+    try:
+        resp.raise_for_status()
+    except Exception:
+        await client.aclose()
+        raise
+
     async def generator():
-        async with httpx.AsyncClient(timeout=300) as client:
-            async with client.stream("POST", url, json=body, headers=headers) as resp:
-                resp.raise_for_status()
-                async for chunk in resp.aiter_bytes():
-                    chunks.append(chunk)
-                    yield chunk
+        try:
+            async for chunk in resp.aiter_bytes():
+                chunks.append(chunk)
+                yield chunk
+        finally:
+            await resp.aclose()
+            await client.aclose()
 
     async def wrapper():
         async for chunk in generator():
@@ -392,13 +430,28 @@ async def _stream_forward_completions(url: str, headers: dict,
                                       body: dict, session_mgr: SessionManager, session: dict):
     chunks: list[bytes] = []
 
+    # Eagerly create the client and send the request so that HTTP errors
+    # (e.g. 400) are raised *before* we return the StreamingResponse —
+    # allowing the try/except in _handle_completions to catch them.
+    client = httpx.AsyncClient(timeout=300)
+    resp = await client.send(
+        client.build_request("POST", url, json=body, headers=headers),
+        stream=True,
+    )
+    try:
+        resp.raise_for_status()
+    except Exception:
+        await client.aclose()
+        raise
+
     async def generator():
-        async with httpx.AsyncClient(timeout=300) as client:
-            async with client.stream("POST", url, json=body, headers=headers) as resp:
-                resp.raise_for_status()
-                async for chunk in resp.aiter_bytes():
-                    chunks.append(chunk)
-                    yield chunk
+        try:
+            async for chunk in resp.aiter_bytes():
+                chunks.append(chunk)
+                yield chunk
+        finally:
+            await resp.aclose()
+            await client.aclose()
 
     async def wrapper():
         async for chunk in generator():

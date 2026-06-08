@@ -52,7 +52,10 @@ _MATCH_FIELDS = {"role", "content", "tool_calls", "tool_call_id", "name"}
 def _canonical(msg):
     """Serialize a message dict to a canonical JSON string for comparison.
     Strips 'timestamp' and non-standard fields, normalizes tool_calls.
-    Null values and empty tool_calls are omitted."""
+    Null values, empty strings, and empty tool_calls are omitted.
+    None and '' are treated as equivalent so that stored messages (which
+    may have content=None after reconstruction) match client messages
+    (which may send content='')."""
     d = {}
     for k, v in msg.items():
         if k == "timestamp":
@@ -63,7 +66,7 @@ def _canonical(msg):
             n = _normalize_tool_calls(v)
             if n:
                 d[k] = n
-        elif v is not None:
+        elif v is not None and v != "":
             d[k] = v
     return json.dumps(d, sort_keys=True, ensure_ascii=False)
 

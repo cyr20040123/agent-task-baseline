@@ -213,6 +213,38 @@ class SessionManager:
     # ------------------------------------------------------------------
     # Dump to ChatML JSON
     # ------------------------------------------------------------------
+    def get_session_chats(self):
+        """Return all current sessions in ChatML format, sorted by most
+        recently active (descending by last message timestamp)."""
+        results = []
+        for sess in self.sessions:
+            msgs = sess["messages"]
+            chatml_msgs, incomplete = self._build_chatml(msgs)
+            if chatml_msgs is None:
+                continue
+            entry = {
+                "messages": chatml_msgs,
+                "remarks": {"incomplete": incomplete},
+            }
+            if sess.get("tools"):
+                entry["tools"] = sess["tools"]
+            results.append(entry)
+
+        # Sort by most recent activity (last message timestamp, descending)
+        def _last_ts(entry):
+            msgs = entry["messages"]
+            for m in reversed(msgs):
+                ts = m.get("timestamp", "")
+                if ts:
+                    return ts
+            return ""
+
+        results.sort(key=_last_ts, reverse=True)
+        return results
+
+    # ------------------------------------------------------------------
+    # Dump to ChatML JSON
+    # ------------------------------------------------------------------
     def dump_all(self):
         if not self.enabled:
             self.sessions = []
@@ -227,6 +259,7 @@ class SessionManager:
                 suffix = f"_{i}" if len(self.sessions) > 1 else ""
                 self._dump_session(sess, suffix, output_dir)
         self.sessions = []
+        return output_dir
 
     def _dump_single(self, output_dir):
         """Single mode: all sessions in one file, no timestamps, no remarks."""

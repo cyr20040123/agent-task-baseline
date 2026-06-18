@@ -30,6 +30,27 @@ def _strip_openai_key(body: dict) -> dict:
     return d
 
 
+
+def _decompress_body(data: bytes, content_encoding: str) -> bytes:
+    """Decompress response body for ChatML reconstruction."""
+    if not content_encoding or not data:
+        return data
+    ce = content_encoding.lower().strip()
+    if ce in ("gzip", "x-gzip"):
+        import gzip
+        return gzip.decompress(data)
+    if ce == "deflate":
+        import zlib
+        return zlib.decompress(data)
+    if ce == "br":
+        try:
+            import brotli
+            return brotli.decompress(data)
+        except ImportError:
+            pass
+    return data
+
+
 def _inject_temperature(body: dict, temperature_default: float) -> None:
     """Inject 'temperature' into *body* if default is non-negative and the
     body does not already contain a 'temperature' key."""
@@ -110,7 +131,7 @@ def _reconstruct_chat_response(chunks: list[bytes]) -> dict | None:
             if choice.get("finish_reason"):
                 c["finish_reason"] = choice["finish_reason"]
             # --- accumulate RL fields from streaming chunks ---
-            if "token_ids" in choice:
+            if "token_ids" in choice and choice["token_ids"] is not None:
                 c.setdefault("token_ids", []).extend(choice["token_ids"])
             if "logprobs" in choice and choice["logprobs"]:
                 c.setdefault("_logprobs_content", [])
@@ -158,7 +179,7 @@ def _reconstruct_completion_response(chunks: list[bytes]) -> dict | None:
             if choice.get("finish_reason"):
                 collected["choices"][idx]["finish_reason"] = choice["finish_reason"]
             # --- accumulate RL fields from streaming chunks ---
-            if "token_ids" in choice:
+            if "token_ids" in choice and choice["token_ids"] is not None:
                 collected["choices"][idx].setdefault("token_ids", []).extend(
                     choice["token_ids"])
             if "logprobs" in choice and choice["logprobs"]:
@@ -174,10 +195,15 @@ def _reconstruct_completion_response(chunks: list[bytes]) -> dict | None:
 # App factory
 # ---------------------------------------------------------------------------
 def create_app(base_url: str, api_key: str, session_manager: SessionManager,
-               temperature_arg: float = -1.0) -> FastAPI:
+               temperature_arg: float = -1.0,
+               default_model: str | None = None,
+               override_model: bool = False) -> FastAPI:
     app = FastAPI()
     upstream = base_url.rstrip("/")
     temperature_default = temperature_arg  # capture for handler closures
+    # When --override-model is set and default_model is available, force all
+    # requests to use the default model (equivalent to /change_override_model).
+    model_override = [default_model] if (override_model and default_model) else [None]
 
     # --- /proxyhealth ---
     @app.get("/proxyhealth")
@@ -206,17 +232,45 @@ def create_app(base_url: str, api_key: str, session_manager: SessionManager,
         return {"status": "ok", "session_name": new_name,
                 "session_path": session_manager.session_path}
 
+    # --- /session_chats ---
+    @app.get("/session_chats")
+    async def session_chats():
+        if not session_manager.enabled:
+            return JSONResponse(
+                {"error": "chatml logging is disabled"}, status_code=400)
+        chats = session_manager.get_session_chats()
+        return JSONResponse(content=chats)
+
+    # --- /change_override_model ---
+    @app.post("/change_override_model")
+    async def change_override_model(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        model = body.get("model", "")
+        if not model or (isinstance(model, str) and model.lower() == "none"):
+            model_override[0] = None
+            logger.info("change_override_model: cleared override (back to pass-through)")
+            return {"status": "ok", "model_override": None}
+        else:
+            model_override[0] = model
+            logger.info("change_override_model: override set to '%s'", model)
+            return {"status": "ok", "model_override": model}
+
     # --- /v1/chat/completions ---
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request):
         return await _handle_chat_completions(request, upstream, api_key, session_manager,
-                                              temperature_default)
+                                              temperature_default, model_override,
+                                              default_model)
 
     # --- /v1/completions ---
     @app.post("/v1/completions")
     async def completions(request: Request):
         return await _handle_completions(request, upstream, api_key, session_manager,
-                                         temperature_default)
+                                         temperature_default, model_override,
+                                         default_model)
 
     # --- catch-all ---
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
@@ -231,9 +285,16 @@ def create_app(base_url: str, api_key: str, session_manager: SessionManager,
 # ---------------------------------------------------------------------------
 async def _handle_chat_completions(request: Request, upstream: str, api_key: str,
                                   session_mgr: SessionManager,
-                                  temperature_default: float = -1.0):
+                                  temperature_default: float = -1.0,
+                                  model_override: list | None = None,
+                                  default_model: str | None = None):
     body = await request.json()
     _inject_temperature(body, temperature_default)
+    # --- model handling ---
+    if model_override and model_override[0] is not None:
+        body["model"] = model_override[0]
+    elif body.get("model") in ("", "none", None) and default_model is not None:
+        body["model"] = default_model
     messages = body.get("messages", [])
     tools = body.get("tools")
     is_stream = body.get("stream", False)
@@ -258,7 +319,7 @@ async def _handle_chat_completions(request: Request, upstream: str, api_key: str
     # --- forward to upstream ---
     headers = _build_upstream_headers(request, api_key)
     body_stripped = _strip_openai_key(body)
-    url = f"{upstream}/v1/chat/completions"
+    url = f"{upstream}/chat/completions"
     logger.debug("-> chat/completions stream=%s body=%s", is_stream,
                  json.dumps(body_stripped, ensure_ascii=False)[:500])
 
@@ -290,9 +351,16 @@ async def _handle_chat_completions(request: Request, upstream: str, api_key: str
 # ---------------------------------------------------------------------------
 async def _handle_completions(request: Request, upstream: str, api_key: str,
                               session_mgr: SessionManager,
-                              temperature_default: float = -1.0):
+                              temperature_default: float = -1.0,
+                              model_override: list | None = None,
+                              default_model: str | None = None):
     body = await request.json()
     _inject_temperature(body, temperature_default)
+    # --- model handling ---
+    if model_override and model_override[0] is not None:
+        body["model"] = model_override[0]
+    elif body.get("model") in ("", "none", None) and default_model is not None:
+        body["model"] = default_model
 
     # --- inject RL parameters ---
     if session_mgr.rl_enabled and session_mgr.enabled:
@@ -317,7 +385,7 @@ async def _handle_completions(request: Request, upstream: str, api_key: str,
             )
 
     headers = _build_upstream_headers(request, api_key)
-    url = f"{upstream}/v1/completions"
+    url = f"{upstream}/completions"
     logger.debug("-> completions stream=%s prompt=%.200s", is_stream, prompt)
 
     try:
@@ -391,9 +459,8 @@ async def _stream_forward(url: str, headers: dict,
                           body: dict, session_mgr: SessionManager, session: dict):
     chunks: list[bytes] = []
 
-    # Eagerly create the client and send the request so that HTTP errors
-    # (e.g. 400) are raised *before* we return the StreamingResponse —
-    # allowing the try/except in _handle_chat_completions to catch them.
+    # Use client.send() to capture response headers before streaming,
+    # so we can forward content-encoding to the client.
     client = httpx.AsyncClient(timeout=300)
     resp = await client.send(
         client.build_request("POST", url, json=body, headers=headers),
@@ -404,6 +471,8 @@ async def _stream_forward(url: str, headers: dict,
     except Exception:
         await client.aclose()
         raise
+
+    resp_ce = resp.headers.get("content-encoding", "")
 
     async def generator():
         try:
@@ -418,21 +487,24 @@ async def _stream_forward(url: str, headers: dict,
         async for chunk in generator():
             yield chunk
         resp_ts = _now_iso()
-        reconstructed = _reconstruct_chat_response(chunks)
+        raw = b"".join(chunks)
+        decompressed = _decompress_body(raw, resp_ce)
+        reconstructed = _reconstruct_chat_response([decompressed])
         if reconstructed:
             _record_chat_response(session_mgr, session, reconstructed, resp_ts)
         logger.info("chat stream %d bytes (%d chunks)", sum(len(c) for c in chunks), len(chunks))
 
-    return StreamingResponse(wrapper(), media_type="text/event-stream")
+    resp_headers = {}
+    if resp_ce:
+        resp_headers["content-encoding"] = resp_ce
+    return StreamingResponse(wrapper(), media_type="text/event-stream",
+                             headers=resp_headers)
 
 
 async def _stream_forward_completions(url: str, headers: dict,
                                       body: dict, session_mgr: SessionManager, session: dict):
     chunks: list[bytes] = []
 
-    # Eagerly create the client and send the request so that HTTP errors
-    # (e.g. 400) are raised *before* we return the StreamingResponse —
-    # allowing the try/except in _handle_completions to catch them.
     client = httpx.AsyncClient(timeout=300)
     resp = await client.send(
         client.build_request("POST", url, json=body, headers=headers),
@@ -443,6 +515,8 @@ async def _stream_forward_completions(url: str, headers: dict,
     except Exception:
         await client.aclose()
         raise
+
+    resp_ce = resp.headers.get("content-encoding", "")
 
     async def generator():
         try:
@@ -457,12 +531,18 @@ async def _stream_forward_completions(url: str, headers: dict,
         async for chunk in generator():
             yield chunk
         resp_ts = _now_iso()
-        reconstructed = _reconstruct_completion_response(chunks)
+        raw = b"".join(chunks)
+        decompressed = _decompress_body(raw, resp_ce)
+        reconstructed = _reconstruct_completion_response([decompressed])
         if reconstructed:
             _record_completion_response(session_mgr, session, reconstructed, resp_ts)
         logger.info("completions stream %d bytes (%d chunks)", sum(len(c) for c in chunks), len(chunks))
 
-    return StreamingResponse(wrapper(), media_type="text/event-stream")
+    resp_headers = {}
+    if resp_ce:
+        resp_headers["content-encoding"] = resp_ce
+    return StreamingResponse(wrapper(), media_type="text/event-stream",
+                             headers=resp_headers)
 
 
 # ---------------------------------------------------------------------------

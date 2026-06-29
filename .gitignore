@@ -13,6 +13,13 @@ pinchbench_exec_history.csv
 sample_trajectory/
 test/
 jiuwenclaw_chat.log
+llm_proxy.yaml
+simple_agent_config.ini
+*.bak
+* copy.*
+*_chat.log
+*pretty.json
+vc/
 
 __pycache__
 *.pyc

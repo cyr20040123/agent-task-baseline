@@ -117,6 +117,10 @@ def parse_args():
     preset_name = None
     if cli_args.preset is not _UNSET:
         preset_name = cli_args.preset
+        if preset_name not in yaml_data:
+            available = [k for k in yaml_data if k not in ("DEFAULT", "RECENT")]
+            parser.error(f"preset '{preset_name}' not found in {CONFIG_FILE}. "
+                         f"Available presets: {', '.join(available) if available else '(none)'}")
     preset = yaml_data.get(preset_name, {}) or {} if preset_name else {}
 
     # -- Resolve each field: CLI > preset > RECENT > DEFAULT > hardcoded --
